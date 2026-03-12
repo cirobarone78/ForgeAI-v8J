@@ -2830,6 +2830,7 @@ async function runAgents(prompt,mode,qual) {
         S.cur.plan = plan;
         save();
         showPlanInUI(plan);
+        updateProjectSummary(job, plan);
         addLog('plan','✅','Planning Agent','Piano completato — ' + (plan.fileTree||[]).length + ' file pianificati');
       }
     } catch(planErr) {
@@ -2850,6 +2851,7 @@ async function runAgents(prompt,mode,qual) {
       }
       if (scaffResult.applied) {
         hasCode = true; // now we have files, next generation is an "edit"
+        updateProjectSummary(job, plan);
         addLog('ui', '🏗', 'Scaffold', 'Struttura base pronta — passo alla generazione componenti');
       }
     } catch(scaffErr) {
@@ -2979,6 +2981,7 @@ async function runAgents(prompt,mode,qual) {
 
       const result = applyJsonPatch(parsed, prompt);
       updateJob(job, { changedFiles: result.changedFiles, attempt: 1 });
+      updateProjectSummary(job, plan);
 
       if (isNodeProject()) {
         updateJob(job, { status: 'RUN' });
@@ -3010,7 +3013,7 @@ async function runAgents(prompt,mode,qual) {
 
   } catch(e) {
     ['plan','ui','logic','test'].forEach(deactivateChip);
-    if (job) updateJob(job, { status: 'FAILED', errorsDetected: [{ type: 'API', message: e.message }] });
+    if (job) { updateJob(job, { status: 'FAILED', errorsDetected: [{ type: 'API', message: e.message }] }); updateProjectSummary(job, plan); }
     renderBbl('ai',`❌ Errore: ${e.message}`); saveMsg('ai',`❌ ${e.message}`);
     if(e.message.includes('401')){setDot('err');openApi();}
     toast(`❌ ${e.message}`,'err');
@@ -3419,12 +3422,13 @@ function getMilestoneForFile(plan, filePath) {
 function buildBatchPrompt(userGoal, plan, targetFiles, batchNum, totalBatches, contextPack) {
   const existingFileList = Object.keys(S.cur?.files || {}).join(', ');
   const milestone = getMilestoneForFile(plan, targetFiles[0]);
+  const summary = S.cur?.projectSummary || '';
 
   return `${userGoal}
 
 CONTESTO: Stai generando file per un progetto esistente.
 Batch ${batchNum}/${totalBatches}. File già nel progetto: ${existingFileList}
-${contextPack ? '\n' + contextPack + '\n' : ''}
+${summary ? '\n' + summary + '\n' : ''}${contextPack ? '\n' + contextPack + '\n' : ''}
 IN QUESTO BATCH genera SOLO questi file (${targetFiles.length}):
 ${targetFiles.map(f => '- ' + f).join('\n')}
 
@@ -3499,6 +3503,7 @@ async function runBatchedGeneration(job, plan, prompt, mode, qual) {
       totalFilesGenerated += result.changedFiles.length;
       totalLinesGenerated += result.totalLines;
       allChangedFiles.push(...result.changedFiles);
+      updateProjectSummary(job, plan);
 
       addLog('ui', '✅', 'Batch ' + batchNum,
         result.changedFiles.length + ' file (' + result.totalLines + ' righe): ' + result.changedFiles.join(', '));
@@ -3664,6 +3669,70 @@ function buildContextPack(job, plan) {
   return out;
 }
 
+// ══════════════════════════════════
+// PROJECT SUMMARY (v8j-p4)
+// ══════════════════════════════════
+// Compact, strategic memory of the project — persisted in S.cur.projectSummary.
+// The Context Pack is *technical* (file contents); this is *strategic* (status + intent).
+
+function buildProjectSummary(job, plan) {
+  const files = S.cur?.files || {};
+  const keys = Object.keys(files).sort();
+  const pending = plan?.fileTree ? plan.fileTree.filter(f => !files[f] || files[f].length < 100) : [];
+  const created = plan?.fileTree ? plan.fileTree.filter(f => files[f] && files[f].length >= 100) : keys;
+
+  // Detect implemented features by scanning file contents (fast heuristic)
+  const allCode = Object.values(files).join('\n').slice(0, 30000);
+  const features = [];
+  if (/router|Route|useNavigate|Link\s+to=/i.test(allCode)) features.push('routing');
+  if (/useState|setState|createContext|useReducer/i.test(allCode)) features.push('state management');
+  if (/fetch\(|axios|api\//i.test(allCode)) features.push('API calls');
+  if (/localStorage|sessionStorage|indexedDB/i.test(allCode)) features.push('local storage');
+  if (/login|auth|token|password|session/i.test(allCode)) features.push('auth');
+  if (/dark.?mode|theme|color-scheme/i.test(allCode)) features.push('dark mode');
+  if (/@media|responsive|mobile/i.test(allCode)) features.push('responsive');
+  if (/chart|graph|d3\.|recharts|canvas/i.test(allCode)) features.push('charts/graphs');
+  if (/drag|drop|sortable|dnd/i.test(allCode)) features.push('drag & drop');
+  if (/modal|dialog|popup/i.test(allCode)) features.push('modals');
+  if (/express|app\.get|app\.post|router\./i.test(allCode)) features.push('server routes');
+
+  // Determine project status
+  let status = 'empty';
+  if (keys.length === 0) status = 'empty';
+  else if (pending.length > 0 && created.length > 0) status = 'partial';
+  else if (pending.length === 0 && created.length > 0) status = 'complete';
+  else if (keys.length > 0 && !plan) status = 'active';
+  if (job?.status === 'FAILED') status = 'failed';
+
+  // Recent errors
+  const errors = (job?.errorsDetected || []).slice(-3).map(e => `[${e.type}] ${e.message}`);
+
+  const summary = [
+    `=== PROJECT SUMMARY ===`,
+    `Tipo: ${plan?.projectType || (isNodeProject() ? 'node' : 'static-html')}`,
+    `Goal: ${(job?.userGoal || S.cur?.name || 'Non definito').slice(0, 120)}`,
+    `Stato: ${status} (${keys.length} file${pending.length ? ', ' + pending.length + ' pending' : ''})`,
+    `File creati: ${created.length ? created.join(', ') : 'nessuno'}`,
+    pending.length ? `File pending: ${pending.join(', ')}` : null,
+    features.length ? `Feature implementate: ${features.join(', ')}` : null,
+    plan?.stack ? `Stack: FE=${plan.stack.frontend||'–'} | BE=${plan.stack.backend||'–'} | DB=${plan.stack.db||'–'}` : null,
+    plan?.notes?.length ? `Note arch.: ${plan.notes.slice(0, 3).join('; ')}` : null,
+    errors.length ? `Errori recenti: ${errors.join('; ')}` : null,
+    `=== FINE SUMMARY ===`
+  ].filter(Boolean).join('\n');
+
+  return summary;
+}
+
+// Update and persist the project summary. Called at lifecycle transitions.
+function updateProjectSummary(job, plan) {
+  if (!S.cur) return '';
+  const summary = buildProjectSummary(job, plan);
+  S.cur.projectSummary = summary;
+  save();
+  return summary;
+}
+
 // Build the multi-file system prompt
 function buildMultiFileSystemPrompt(mode, qual, isEdit, agentPersona, plan, contextPack) {
   const qd={pro:'Design professionale, raffinato, codice pulito.',fast:'Implementazione veloce ma funzionante.',detailed:'Molto dettagliato con commenti esaustivi.'};
@@ -3708,7 +3777,7 @@ REGOLE ANTI-BUG:
 - Nessun nome duplicato per scopi diversi. Ogni funzione/import deve esistere.
 - Testa mentalmente il flusso completo. Gestisci edge cases.
 - Se generi un gioco: game loop funzionante dal primo frame, controlli responsivi, collisioni corrette.
-${contextPack ? '\n── CONTEXT PACK (stato attuale del progetto) ──\n' + contextPack + '\n── FINE CONTEXT PACK ──\n' : ''}
+${S.cur?.projectSummary ? '\n' + S.cur.projectSummary + '\n' : ''}${contextPack ? '\n── CONTEXT PACK (dettaglio tecnico) ──\n' + contextPack + '\n── FINE CONTEXT PACK ──\n' : ''}
 FORMATO OUTPUT OBBLIGATORIO — rispondi SOLO con questo JSON valido (nessun testo prima o dopo):
 {
   "summary": "breve descrizione di cosa hai fatto",
