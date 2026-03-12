@@ -2902,13 +2902,14 @@ async function runAgents(prompt,mode,qual) {
       addLog('ui','🎨','UI Agent',mode==='html'?'Progetto layout, stili e interazioni…':`Genero codice ${mode.toUpperCase()}…`);
       await sleep(400);
 
+      const ctxPack = buildContextPack(job, plan);
       let raw;
       try {
-        raw = await callAPIMultiFile(prompt, mode, qual, hasCode, 'ui', plan);
+        raw = await callAPIMultiFile(prompt, mode, qual, hasCode, 'ui', plan, ctxPack);
       } catch(apiErr) {
         addLog('logic','🔄','Retry','Primo tentativo fallito, riprovo…');
         await sleep(1500);
-        raw = await callAPIMultiFile(prompt, mode, qual, hasCode, 'ui', plan);
+        raw = await callAPIMultiFile(prompt, mode, qual, hasCode, 'ui', plan, ctxPack);
       }
 
       if (S.currentJob?.id !== job.id) return;
@@ -3241,7 +3242,7 @@ function getMilestoneForFile(plan, filePath) {
 }
 
 // Build a focused prompt for a specific batch of files
-function buildBatchPrompt(userGoal, plan, targetFiles, batchNum, totalBatches) {
+function buildBatchPrompt(userGoal, plan, targetFiles, batchNum, totalBatches, contextPack) {
   const existingFileList = Object.keys(S.cur?.files || {}).join(', ');
   const milestone = getMilestoneForFile(plan, targetFiles[0]);
 
@@ -3249,7 +3250,7 @@ function buildBatchPrompt(userGoal, plan, targetFiles, batchNum, totalBatches) {
 
 CONTESTO: Stai generando file per un progetto esistente.
 Batch ${batchNum}/${totalBatches}. File già nel progetto: ${existingFileList}
-
+${contextPack ? '\n' + contextPack + '\n' : ''}
 IN QUESTO BATCH genera SOLO questi file (${targetFiles.length}):
 ${targetFiles.map(f => '- ' + f).join('\n')}
 
@@ -3292,11 +3293,12 @@ async function runBatchedGeneration(job, plan, prompt, mode, qual) {
     updateJob(job, { status: 'APPLY', attempt: batchNum });
 
     try {
-      // Build focused prompt for this batch
-      const batchPrompt = buildBatchPrompt(prompt, plan, targetFiles, batchNum, totalBatches);
+      // Build focused prompt for this batch (with fresh context pack each time)
+      const ctxPack = buildContextPack(job, plan);
+      const batchPrompt = buildBatchPrompt(prompt, plan, targetFiles, batchNum, totalBatches, ctxPack);
       S.history.push({role:'user', content: batchPrompt});
 
-      const raw = await callAPIMultiFile(batchPrompt, mode, qual, true, 'ui', plan);
+      const raw = await callAPIMultiFile(batchPrompt, mode, qual, true, 'ui', plan, ctxPack);
       S.history.push({role:'assistant', content:'Batch ' + batchNum + ' generato.'});
 
       if (!S.currentJob || S.currentJob.id !== job.id) break; // cancelled
@@ -3367,13 +3369,124 @@ async function runBatchedGeneration(job, plan, prompt, mode, qual) {
   return { completed: true, totalFiles: totalFilesGenerated, totalLines: totalLinesGenerated };
 }
 
+// ══════════════════════════════════
+// CONTEXT PACK (v8j-p2)
+// ══════════════════════════════════
+// Builds a compact context string the LLM receives before every generation.
+// Includes: file tree, key-file extracts, changed files, recent logs.
+// Budget: ~12-18k chars max.
+
+function buildContextPack(job, plan) {
+  if (!S.cur || !S.cur.files) return '';
+  const files = S.cur.files;
+  const keys = Object.keys(files).sort();
+  if (keys.length === 0) return '';
+
+  const BUDGET = 16000; // soft char limit
+  let out = '';
+
+  // ── 1. File tree ──
+  out += '── FILE TREE ──\n';
+  out += keys.map(f => {
+    const lines = (files[f] || '').split('\n').length;
+    return `  ${f}  (${lines} righe)`;
+  }).join('\n') + '\n\n';
+
+  // ── 2. Key-file extracts (head + tail) ──
+  const IMPORTANT = [
+    'package.json',
+    'server.js', 'index.js',
+    'src/App.jsx', 'src/App.tsx', 'app/page.jsx', 'app/page.tsx',
+    'index.html', 'public/index.html',
+    'vite.config.js', 'vite.config.ts',
+    'style.css', 'src/index.css'
+  ];
+  const HEAD_LINES = 40;
+  const TAIL_LINES = 20;
+
+  function headTail(content, headN, tailN) {
+    const lines = content.split('\n');
+    if (lines.length <= headN + tailN + 5) return content; // small enough, include all
+    const head = lines.slice(0, headN).join('\n');
+    const tail = lines.slice(-tailN).join('\n');
+    return head + '\n/* … (' + (lines.length - headN - tailN) + ' righe omesse) … */\n' + tail;
+  }
+
+  const extracts = [];
+  for (const pattern of IMPORTANT) {
+    if (files[pattern]) {
+      extracts.push({ path: pattern, content: files[pattern] });
+    }
+  }
+  // Also include any file that looks like an entry point but wasn't in the list
+  for (const k of keys) {
+    if (extracts.length >= 6) break;
+    if (extracts.find(e => e.path === k)) continue;
+    if (/^(src\/)?(main|index|app)\.(jsx?|tsx?)$/i.test(k) || k === 'app.js') {
+      extracts.push({ path: k, content: files[k] });
+    }
+  }
+
+  if (extracts.length) {
+    out += '── FILE CHIAVE (estratti) ──\n';
+    let extractBudget = Math.floor(BUDGET * 0.55);
+    for (const ex of extracts) {
+      const snippet = headTail(ex.content, HEAD_LINES, TAIL_LINES);
+      const chunk = `--- ${ex.path} ---\n${snippet}\n\n`;
+      if (out.length + chunk.length > extractBudget + 2000) {
+        // over budget, use smaller extract
+        const small = headTail(ex.content, 15, 8);
+        out += `--- ${ex.path} ---\n${small}\n\n`;
+      } else {
+        out += chunk;
+      }
+    }
+  }
+
+  // ── 3. Changed files in current job ──
+  const changed = job?.changedFiles || [];
+  if (changed.length) {
+    out += '── FILE MODIFICATI (job corrente) ──\n';
+    out += changed.join(', ') + '\n\n';
+    // Include brief head of each changed file not already extracted
+    const alreadyExtracted = new Set(extracts.map(e => e.path));
+    for (const cf of changed) {
+      if (alreadyExtracted.has(cf) || !files[cf]) continue;
+      if (out.length > BUDGET - 1000) break;
+      const snippet = headTail(files[cf], 20, 10);
+      out += `--- ${cf} (modificato) ---\n${snippet}\n\n`;
+    }
+  }
+
+  // ── 4. Recent job logs ──
+  if (job?.runLogs) {
+    const logSnippet = job.runLogs.slice(-1500);
+    out += '── LOG RECENTI ──\n' + logSnippet + '\n\n';
+  }
+  if (job?.errorsDetected?.length) {
+    out += '── ERRORI RILEVATI ──\n';
+    out += job.errorsDetected.map(e => `[${e.type}] ${e.message}`).join('\n') + '\n\n';
+  }
+
+  // ── 5. Plan summary (compact) ──
+  if (plan?.fileTree) {
+    const pending = plan.fileTree.filter(f => !files[f] || files[f].length < 50);
+    if (pending.length) {
+      out += '── FILE DA GENERARE (dal piano) ──\n';
+      out += pending.join(', ') + '\n\n';
+    }
+  }
+
+  // Trim to budget
+  if (out.length > BUDGET) out = out.slice(0, BUDGET) + '\n[… context troncato …]\n';
+
+  return out;
+}
+
 // Build the multi-file system prompt
-function buildMultiFileSystemPrompt(mode, qual, isEdit, agentPersona, plan) {
+function buildMultiFileSystemPrompt(mode, qual, isEdit, agentPersona, plan, contextPack) {
   const qd={pro:'Design professionale, raffinato, codice pulito.',fast:'Implementazione veloce ma funzionante.',detailed:'Molto dettagliato con commenti esaustivi.'};
   const fileList = S.cur && Object.keys(S.cur.files).length ? Object.keys(S.cur.files).join(', ') : 'nessuno';
-  const existingCode = S.cur && Object.keys(S.cur.files).length
-    ? Object.entries(S.cur.files).slice(0, 3).map(([f,c]) => `--- ${f} ---\n${c.slice(0, 3000)}`).join('\n\n')
-    : '';
 
   // Include plan context if available
   const planContext = plan ? `
@@ -3385,10 +3498,15 @@ ${(plan.notes||[]).length ? '- Note: ' + plan.notes.join('; ') : ''}
 Genera ESATTAMENTE i file elencati nel piano. Segui la struttura indicata.
 ` : '';
 
+  // Anti-monofile rule for structured projects
+  const antiMono = (plan && ['vite-react','nextjs','node-express'].includes(plan.projectType))
+    ? `\nDIVIETO MONOFILE: Questo progetto è ${plan.projectType}. NON generare un singolo file HTML con tutto dentro. Devi rispettare la struttura multi-file dello scaffold (${fileList}). Ogni file va nel suo path corretto.\n`
+    : '';
+
   return `Sei un expert full-stack developer e UI/UX designer. Genera un PROGETTO MULTI-FILE di qualità professionale.
 
 ${qd[qual]}
-${planContext}
+${planContext}${antiMono}
 STRATEGIA SCAFFOLD-FIRST:
 - Il PRIMO batch deve creare: package.json (se Node/React), struttura cartelle, entrypoints.
 - I batch successivi aggiungono: componenti, pagine, servizi, styling.
@@ -3409,7 +3527,7 @@ REGOLE ANTI-BUG:
 - Nessun nome duplicato per scopi diversi. Ogni funzione/import deve esistere.
 - Testa mentalmente il flusso completo. Gestisci edge cases.
 - Se generi un gioco: game loop funzionante dal primo frame, controlli responsivi, collisioni corrette.
-
+${contextPack ? '\n── CONTEXT PACK (stato attuale del progetto) ──\n' + contextPack + '\n── FINE CONTEXT PACK ──\n' : ''}
 FORMATO OUTPUT OBBLIGATORIO — rispondi SOLO con questo JSON valido (nessun testo prima o dopo):
 {
   "summary": "breve descrizione di cosa hai fatto",
@@ -3430,14 +3548,13 @@ REGOLE JSON:
 - Se il progetto è troppo grande per un batch, metti nextBatch.needed=true e suggerisci il prompt per continuare.
 - Per HTML semplice (senza Node): metti tutti i file in un batch. Usa file separati (html, css, js).
 - Per React/Vite: primo batch = package.json + vite.config + index.html + main.jsx + App.jsx. Batch successivi = componenti.
-- NON generare markdown, backtick o testo fuori dal JSON.
-${existingCode ? '\n\nCODICE ATTUALE:\n' + existingCode : ''}`;
+- NON generare markdown, backtick o testo fuori dal JSON.`;
 }
 
 // Call API requesting multi-file JSON output
-async function callAPIMultiFile(prompt, mode, qual, isEdit, agent, plan) {
+async function callAPIMultiFile(prompt, mode, qual, isEdit, agent, plan, contextPack) {
   const agentPersona = AGENTS[currentAgent]?.systemExtra || '';
-  const sys = buildMultiFileSystemPrompt(mode, qual, isEdit, agentPersona, plan);
+  const sys = buildMultiFileSystemPrompt(mode, qual, isEdit, agentPersona, plan, contextPack || '');
   const msgs = S.history.slice(-6);
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -4237,7 +4354,7 @@ async function autoFixLoop(job, mode, qual) {
 
   try {
     const fixPrompt = buildFixPrompt(job);
-    const raw = await callAPIMultiFile(fixPrompt, mode, qual, true, 'logic');
+    const raw = await callAPIMultiFile(fixPrompt, mode, qual, true, 'logic', null, buildContextPack(job, null));
     const parsed = parseAIResponse(raw, mode);
 
     // Apply fix
