@@ -3179,7 +3179,7 @@ ${existingFiles}`;
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
     body: JSON.stringify({
-      model: MODELS.sonnet, max_tokens: 2000, system: planSys,
+      model: MODELS.sonnet, max_tokens: 2000, temperature: 0.3, system: planSys,
       messages: [{ role: 'user', content: prompt }]
     })
   });
@@ -3426,8 +3426,8 @@ async function runScaffoldPhase(job, plan, mode, qual) {
 // ══════════════════════════════════
 // BATCHED GENERATION (v8j)
 // ══════════════════════════════════
-const MAX_BATCHES = 10;
-const FILES_PER_BATCH = 3;
+const MAX_BATCHES = 12;
+const FILES_PER_BATCH = 2;
 
 // Find files from plan that are not yet created or are just placeholders
 function getPendingFiles(plan) {
@@ -3454,6 +3454,12 @@ function buildBatchPrompt(userGoal, plan, targetFiles, batchNum, totalBatches, c
   const milestone = getMilestoneForFile(plan, targetFiles[0]);
   const summary = S.cur?.projectSummary || '';
 
+  // Determine if any target files are CSS/style related
+  const hasStyleFiles = targetFiles.some(f => /\.css$|style/i.test(f));
+  const styleReminder = hasStyleFiles
+    ? `\nSTILE OBBLIGATORIO: CSS vars (--primary, --bg, --surface, --text), sfondo scuro (MAI #fff), Google Fonts Inter, border-radius 12px, box-shadow, hover/focus states, flex/grid layout, @media (max-width:768px). Vedi la baseline CSS nel system prompt.\n`
+    : `\nRICORDA: usa le CSS classes e gli ID già definiti nel progetto (vedi interface contract). Ogni handler JS deve corrispondere a un elemento reale.\n`;
+
   return `${userGoal}
 
 CONTESTO: Stai generando file per un progetto esistente.
@@ -3464,9 +3470,10 @@ ${targetFiles.map(f => '- ' + f).join('\n')}
 
 ${milestone ? 'Milestone: "' + milestone.name + '"' : ''}
 ${plan.notes ? 'Note progetto: ' + plan.notes.join('; ') : ''}
-
+${styleReminder}
 I file devono essere COMPLETI e FUNZIONANTI, integrandosi con i file già esistenti nel progetto.
-Non rigenerare file già creati — genera SOLO quelli elencati sopra.`;
+Non rigenerare file già creati — genera SOLO quelli elencati sopra.
+Ogni funzione deve avere un corpo reale. Nessun TODO, placeholder, o corpo vuoto.`;
 }
 
 // Main batched generation loop
@@ -3592,6 +3599,41 @@ async function runBatchedGeneration(job, plan, prompt, mode, qual) {
 // Includes: file tree, key-file extracts, changed files, recent logs.
 // Budget: ~12-18k chars max.
 
+// Extract interface contract: IDs, CSS classes, exported functions, event handlers
+// Compact (~1-3k chars) but infinitely more useful than head+tail for cross-file coherence
+function buildInterfaceContract(files) {
+  const ids = new Set(), classes = new Set(), fns = new Set(), exports = new Set(), cssVars = new Set();
+  for (const [path, content] of Object.entries(files)) {
+    if (!content) continue;
+    // HTML IDs
+    const idMatches = content.matchAll(/\bid\s*=\s*["']([^"']+)["']/g);
+    for (const m of idMatches) ids.add(m[1]);
+    // CSS classes used in markup (class="x y z")
+    const clsMatches = content.matchAll(/\bclass(?:Name)?\s*=\s*["']([^"']+)["']/g);
+    for (const m of clsMatches) m[1].split(/\s+/).forEach(c => { if (c && c.length > 1 && c.length < 40) classes.add(c); });
+    // CSS class definitions (.foo { )
+    const cssDefs = content.matchAll(/\.([a-zA-Z][\w-]*)\s*[{,]/g);
+    for (const m of cssDefs) classes.add(m[1]);
+    // CSS custom properties
+    const varDefs = content.matchAll(/(--[\w-]+)\s*:/g);
+    for (const m of varDefs) cssVars.add(m[1]);
+    // JS function declarations
+    const fnDefs = content.matchAll(/(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(?.*?\)?\s*=>)/g);
+    for (const m of fnDefs) fns.add(m[1] || m[2]);
+    // ES exports
+    const expMatches = content.matchAll(/export\s+(?:default\s+)?(?:function\s+|const\s+|class\s+)(\w+)/g);
+    for (const m of expMatches) exports.add(m[1]);
+  }
+  let out = '── INTERFACE CONTRACT (cross-file) ──\n';
+  if (ids.size) out += 'HTML IDs: ' + [...ids].slice(0, 60).join(', ') + '\n';
+  if (classes.size) out += 'CSS classes: ' + [...classes].slice(0, 80).join(', ') + '\n';
+  if (cssVars.size) out += 'CSS vars: ' + [...cssVars].slice(0, 30).join(', ') + '\n';
+  if (fns.size) out += 'JS functions: ' + [...fns].slice(0, 60).join(', ') + '\n';
+  if (exports.size) out += 'Exports: ' + [...exports].slice(0, 30).join(', ') + '\n';
+  out += '\n';
+  return out;
+}
+
 function buildContextPack(job, plan) {
   if (!S.cur || !S.cur.files) return '';
   const files = S.cur.files;
@@ -3600,6 +3642,9 @@ function buildContextPack(job, plan) {
 
   const BUDGET = 16000; // soft char limit
   let out = '';
+
+  // ── 0. Interface contract (cross-file coherence) ──
+  out += buildInterfaceContract(files);
 
   // ── 1. File tree ──
   out += '── FILE TREE ──\n';
@@ -3799,17 +3844,22 @@ REQUISITI:
 4. Per React/Vite: componenti separati, hooks, state management.
 5. Per Express: routes separate, middleware, dati di esempio realistici.
 
-BASELINE GRAFICA OBBLIGATORIA (per qualsiasi progetto con UI):
-- CSS custom properties: --primary, --bg, --surface, --text, --radius, --shadow (mai valori hardcoded ovunque)
-- Background: MAI bianco grezzo (#fff). Usa colori scuri, gradienti sottili, o sfumature (#0f0f23, #1a1a2e, #f8f9fa per light)
-- Tipografia: Google Fonts (Inter, Poppins, Outfit, ecc.) con gerarchia chiara h1>h2>h3>p
-- Card/Container: background surface distinto, border-radius 12-16px, box-shadow sottile
-- Bottoni: padding 10px 20px+, border-radius, colore primario, hover con scale/brightness, transizione 0.2s
-- Input: bordo, padding 10px+, border-radius, focus ring visibile
-- Layout: display flex/grid con gap consistente, container centrato con max-width
-- Transizioni: transition 0.2s ease su hover, focus, active per tutti gli elementi interattivi
-- Media query: almeno @media (max-width: 768px)
-- Mai aspetto "plain HTML page" — ogni elemento deve avere styling visivo curato
+BASELINE GRAFICA OBBLIGATORIA — il tuo CSS DEVE partire da questa struttura (adatta colori/nomi al progetto):
+
+:root{--primary:#6366f1;--primary-hover:#4f46e5;--bg:#0f172a;--surface:#1e293b;--surface-hover:#334155;--border:#334155;--text:#f1f5f9;--text-muted:#94a3b8;--radius:12px;--shadow:0 4px 24px rgba(0,0,0,0.25);}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.6;}
+h1{font-size:1.8rem;font-weight:700;} h2{font-size:1.3rem;font-weight:600;color:var(--text-muted);}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;box-shadow:var(--shadow);}
+button,.btn{padding:0.6rem 1.2rem;border:none;border-radius:8px;background:var(--primary);color:#fff;font-weight:600;cursor:pointer;transition:all 0.2s;}
+button:hover,.btn:hover{background:var(--primary-hover);transform:translateY(-1px);}
+input,textarea,select{padding:0.6rem 1rem;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);outline:none;transition:border 0.2s;width:100%;}
+input:focus,textarea:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(99,102,241,0.15);}
+@media(max-width:768px){.container{padding:1rem;}.sidebar{display:none;}}
+
+Carica SEMPRE Google Fonts: <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+MAI sfondo bianco grezzo (#fff). Usa la palette. Ogni bottone/input/card DEVE avere hover/focus state.
+Se dashboard/app: sidebar scura (250px) a sinistra, main content a destra con padding 2rem, layout flex/grid.
 
 REGOLE ANTI-BUG FUNZIONALI:
 - Ogni funzione referenziata da onclick/addEventListener DEVE essere definita nel codice
@@ -3859,7 +3909,7 @@ async function callAPIMultiFile(prompt, mode, qual, isEdit, agent, plan, context
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-    body: JSON.stringify({ model: getModelForAgent(agent), max_tokens: 16000, system: sys, messages: msgs })
+    body: JSON.stringify({ model: getModelForAgent(agent), max_tokens: 32000, temperature: 0.3, system: sys, messages: msgs })
   });
   if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error?.message || `HTTP ${r.status}`); }
   const data = await r.json();
@@ -4022,12 +4072,12 @@ REGOLA ASSOLUTA: solo codice Python puro, zero markdown, zero backtick, zero spi
     fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model: getModelForAgent('ui'), max_tokens:16000, system:sysFE, messages:[...msgs,{role:'user',content:prompt+' — genera il FRONTEND HTML completo e professionale'}]})
+      body:JSON.stringify({model: getModelForAgent('ui'), max_tokens:32000, temperature:0.3, system:sysFE, messages:[...msgs,{role:'user',content:prompt+' — genera il FRONTEND HTML completo e professionale'}]})
     }),
     fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model: getModelForAgent('logic'), max_tokens:12000, system:sysBE, messages:[...msgs,{role:'user',content:prompt+' — genera il BACKEND Python Flask completo'}]})
+      body:JSON.stringify({model: getModelForAgent('logic'), max_tokens:16000, temperature:0.3, system:sysBE, messages:[...msgs,{role:'user',content:prompt+' — genera il BACKEND Python Flask completo'}]})
     })
   ]);
 
@@ -4082,7 +4132,7 @@ REGOLE ANTI-BUG (SEGUI SEMPRE):
 REGOLA ASSOLUTA: SOLO codice puro. Zero markdown, zero backtick, zero spiegazioni, zero testo prima o dopo il codice.
 Per HTML: file completo <!DOCTYPE html> con TUTTO inline (CSS in <style>, JS in <script>). Includi meta viewport e font imports.${ex}`;
   const msgs=S.history.slice(-6);  // last entry already contains multipart content from buildContent
-  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:getModelForAgent(agent),max_tokens:16000,system:sys,messages:msgs})});
+  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:getModelForAgent(agent),max_tokens:32000,temperature:0.3,system:sys,messages:msgs})});
   if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
   const data=await r.json();
   return data.content.map(b=>b.text||'').join('').trim().replace(/^```[\w]*\n?/m,'').replace(/\n?```\s*$/m,'').trim();
@@ -4682,7 +4732,7 @@ REGOLA ASSOLUTA: SOLO codice puro. Zero spiegazioni, zero markdown, zero backtic
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
     body: JSON.stringify({
-      model: MODELS.sonnet, max_tokens: 16000, system: reviewSys,
+      model: MODELS.sonnet, max_tokens: 32000, temperature: 0.3, system: reviewSys,
       messages: [{ role: 'user', content: reviewMsg }]
     })
   });
@@ -5130,7 +5180,7 @@ ISTRUZIONI: Correggi TUTTI i problemi CRITICI. Per i problemi UI, aggiungi styli
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
-        model: MODELS.sonnet, max_tokens: 16000, system: fixSys,
+        model: MODELS.sonnet, max_tokens: 32000, temperature: 0.3, system: fixSys,
         messages: [{ role: 'user', content: fixMsg }]
       })
     });
