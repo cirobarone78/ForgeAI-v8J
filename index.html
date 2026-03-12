@@ -2239,11 +2239,14 @@ async function pushToGitHub() {
     }
     ghStep('gs-3', 'done');
 
-    // Step 4: Enable GitHub Pages (only for public repos with HTML)
+    // Step 4: Enable GitHub Pages (only for static projects with HTML)
+    const gs4 = document.getElementById('gs-4');
+    if (gs4) gs4.innerHTML = `<div class="step-dot"></div>${projNeedsBuild ? 'Verifica deploy' : 'Attivazione GitHub Pages'}`;
     ghStep('gs-4', 'active');
     const hasHtml = Object.keys(files).some(f => f.endsWith('.html'));
+    const projNeedsBuild = needsBuild();
     let pagesUrl = null;
-    if (!isPrivate && hasHtml) {
+    if (!isPrivate && hasHtml && !projNeedsBuild) {
       await sleep(500);
       const pagesRes = await fetch(`https://api.github.com/repos/${user.login}/${repoName}/pages`, {
         method: 'POST', headers: {...headers, 'Accept': 'application/vnd.github.switcheroo-preview+json'},
@@ -2264,7 +2267,18 @@ async function pushToGitHub() {
     document.getElementById('gh-repo-link').href = repoUrl;
 
     let pagesHtml = '';
-    if (pagesUrl) {
+    if (projNeedsBuild) {
+      const kind = getProjectKind();
+      const deployTips = {
+        'vite-react': 'Importa la repo su <strong>Vercel</strong> o <strong>Netlify</strong> — rileveranno Vite automaticamente.',
+        'nextjs': 'Importa la repo su <strong>Vercel</strong> (consigliato per Next.js) per deploy automatico.',
+        'node-express': 'Usa <strong>Railway</strong>, <strong>Render</strong> o <strong>Fly.io</strong> per il deploy del server Node.',
+        'node': 'Usa <strong>Railway</strong> o <strong>Render</strong> per il deploy.'
+      };
+      pagesHtml = `<strong style="color:#F59E0B">⚠️ Progetto ${kind}</strong> — richiede build, GitHub Pages non attivato.<br>
+        ${deployTips[kind] || deployTips['node']}<br>
+        <code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;font-size:11px;">git clone ${repoUrl}.git && npm install && npm run dev</code>`;
+    } else if (pagesUrl) {
       pagesHtml = `<strong style="color:#3A86FF">🌐 GitHub Pages attivato!</strong><br>
         Il sito sarà live tra ~1 minuto su:<br>
         <a href="${pagesUrl}" target="_blank">${pagesUrl}</a>`;
@@ -3011,7 +3025,7 @@ function applyCode(code,mode,prompt) {
   document.getElementById('pj-name').textContent=S.cur.name;
   document.getElementById('deploy-btn').style.display='flex';
   document.getElementById('sandbox-btn').style.display='flex';
-  if(mode==='html'||mode==='react'){updatePrev(code);switchTab('preview');}else{switchTab('code');}
+  if((mode==='html'||mode==='react')&&!needsBuild()){updatePrev(code);switchTab('preview');}else if(needsBuild()){showFrameworkPreview();switchTab('preview');}else{switchTab('code');}
 }
 
 // ══════════════════════════════════
@@ -3029,6 +3043,34 @@ function isStaticFrontend() {
   if (!S.cur || !S.cur.files) return true;
   const files = Object.keys(S.cur.files);
   return !files.includes('package.json') && files.some(f => f.endsWith('.html'));
+}
+
+// Detect if project needs a build step (Vite/React, Next, Node Express)
+// These can't be previewed via srcdoc or deployed raw to GitHub Pages.
+function needsBuild() {
+  if (!S.cur || !S.cur.files) return false;
+  const pkg = S.cur.files['package.json'];
+  if (!pkg) return false;
+  // Check for framework markers
+  const hasViteConfig = !!S.cur.files['vite.config.js'] || !!S.cur.files['vite.config.ts'];
+  const hasJSX = Object.keys(S.cur.files).some(f => /\.jsx$|\.tsx$/.test(f));
+  const hasNextConfig = !!S.cur.files['next.config.js'] || !!S.cur.files['next.config.mjs'];
+  const hasServerEntry = !!S.cur.files['server.js'] || !!S.cur.files['server.ts'];
+  // Also sniff package.json for "vite", "react", "next", "express"
+  const pkgLower = pkg.toLowerCase();
+  const isFramework = hasViteConfig || hasJSX || hasNextConfig ||
+    /\"(vite|react|next|express)\"/.test(pkgLower);
+  return isFramework || hasServerEntry;
+}
+
+// Returns a label for the project type (for UI messages)
+function getProjectKind() {
+  if (!needsBuild()) return 'static';
+  const pkg = (S.cur?.files?.['package.json'] || '').toLowerCase();
+  if (/\"next\"/.test(pkg)) return 'nextjs';
+  if (/\"express\"/.test(pkg) || S.cur?.files?.['server.js']) return 'node-express';
+  if (/\"vite\"/.test(pkg) || S.cur?.files?.['vite.config.js']) return 'vite-react';
+  return 'node';
 }
 
 // ══════════════════════════════════
@@ -3631,10 +3673,15 @@ function applyJsonPatch(parsed, prompt) {
   document.getElementById('deploy-btn').style.display = 'flex';
   document.getElementById('sandbox-btn').style.display = 'flex';
 
-  // Preview if HTML exists
-  const htmlFile = S.cur.files['index.html'] || S.cur.files['public/index.html'];
-  if (htmlFile && isStaticFrontend()) { updatePrev(htmlFile); switchTab('preview'); }
-  else if (result.changedFiles[0]) { switchTab('code'); }
+  // Preview: only for static projects; framework projects need build
+  if (needsBuild()) {
+    showFrameworkPreview();
+    switchTab('preview');
+  } else {
+    const htmlFile = S.cur.files['index.html'] || S.cur.files['public/index.html'];
+    if (htmlFile) { updatePrev(htmlFile); switchTab('preview'); }
+    else if (result.changedFiles[0]) { switchTab('code'); }
+  }
 
   return result;
 }
@@ -3868,12 +3915,54 @@ function updateFilesList() {
 // ══════════════════════════════════
 function updatePrev(html){
   document.getElementById('prev-empty').style.display='none';
+  document.getElementById('prev-framework')?.remove();
   const f=document.getElementById('prev-frame'); f.style.display='block'; f.srcdoc=html;
   document.getElementById('curl').textContent=(S.cur?.name||'app')+' · localhost';
 }
+
+function showFrameworkPreview() {
+  document.getElementById('prev-empty').style.display='none';
+  document.getElementById('prev-frame').style.display='none';
+  // Remove old banner if present
+  document.getElementById('prev-framework')?.remove();
+  const kind = getProjectKind();
+  const labels = {
+    'vite-react': { icon:'⚛️', name:'Vite + React', cmd:'npm run dev', build:'npm run build', deploy:'Vercel, Netlify o GitHub Pages (con build)' },
+    'nextjs':     { icon:'▲',  name:'Next.js',      cmd:'npm run dev', build:'npm run build && npm run export', deploy:'Vercel (consigliato) o Netlify' },
+    'node-express':{ icon:'🟢', name:'Node + Express', cmd:'npm start',  build:'(nessuno)', deploy:'Railway, Render, Fly.io, Heroku' },
+    'node':       { icon:'📦', name:'Node.js',       cmd:'npm start',  build:'npm run build', deploy:'Railway, Render, Fly.io' }
+  };
+  const info = labels[kind] || labels['node'];
+  const fileCount = Object.keys(S.cur?.files || {}).length;
+  const panel = document.getElementById('p-preview');
+  const div = document.createElement('div');
+  div.id = 'prev-framework';
+  div.style.cssText = 'flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;text-align:center;gap:14px;';
+  div.innerHTML = `
+    <div style="width:64px;height:64px;border-radius:18px;background:rgba(58,134,255,0.1);border:1px solid rgba(58,134,255,0.2);display:flex;align-items:center;justify-content:center;font-size:28px;">${info.icon}</div>
+    <div style="font-family:'Outfit',sans-serif;font-size:18px;font-weight:700;color:#fff;">Progetto ${info.name}</div>
+    <div style="font-size:13px;color:#A1A1AA;max-width:360px;line-height:1.6;">
+      Questo progetto ha <strong style="color:#fff">${fileCount} file</strong> sorgente e richiede un <strong style="color:#3A86FF">build step</strong> per funzionare.<br>
+      Non puo' essere visualizzato in preview diretta.
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 18px;text-align:left;width:100%;max-width:360px;font-size:12px;line-height:1.8;color:#A1A1AA;">
+      <div style="font-family:'Outfit',sans-serif;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:6px;">Come eseguire</div>
+      <div><span style="color:#FF9F1C">1.</span> Scarica i file → <strong style="color:#fff;cursor:pointer" onclick="dlProject()">↓ Scarica tutto</strong></div>
+      <div><span style="color:#FF9F1C">2.</span> <code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11px;">npm install</code></div>
+      <div><span style="color:#FF9F1C">3.</span> <code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11px;">${info.cmd}</code></div>
+      ${info.build !== '(nessuno)' ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);"><span style="color:#3A86FF">Build:</span> <code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11px;">${info.build}</code></div>` : ''}
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);"><span style="color:#10B981">Deploy:</span> ${info.deploy}</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px;">
+      <button onclick="dlProject()" style="padding:8px 16px;border-radius:9999px;border:1px solid rgba(255,159,28,0.25);background:rgba(255,159,28,0.1);color:#FF9F1C;font-family:'Outfit',sans-serif;font-size:12px;font-weight:600;cursor:pointer;">↓ Scarica progetto</button>
+      <button onclick="switchTab('code')" style="padding:8px 16px;border-radius:9999px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);color:#A1A1AA;font-family:'Outfit',sans-serif;font-size:12px;font-weight:500;cursor:pointer;">Vedi codice</button>
+    </div>`;
+  panel.appendChild(div);
+  document.getElementById('curl').textContent = (S.cur?.name||'app') + ' · ' + info.name + ' (sorgente)';
+}
 function clearPrev(){document.getElementById('prev-empty').style.display='flex';const f=document.getElementById('prev-frame');f.style.display='none';document.getElementById('curl').textContent='nessuna app generata';}
 function clearEd(){document.getElementById('code-pre').style.display='none';document.getElementById('code-empty').style.display='flex';}
-function refreshPrev(){if(S.curFile&&S.cur?.files[S.curFile])updatePrev(S.cur.files[S.curFile]);}
+function refreshPrev(){if(needsBuild()){showFrameworkPreview();return;}if(S.curFile&&S.cur?.files[S.curFile])updatePrev(S.cur.files[S.curFile]);}
 
 // ══════════════════════════════════
 // TABS
@@ -3905,7 +3994,15 @@ function dlProject(){
   toast(`↓ ${ff.length} file scaricati`,'ok');
 }
 function dl(content,name){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:'text/plain;charset=utf-8'}));a.download=name;a.click();URL.revokeObjectURL(a.href);}
-function onDeploy(){toast('↑ Usa Netlify, Vercel o GitHub Pages per il deploy','ok');}
+function onDeploy(){
+  if (needsBuild()) {
+    const kind = getProjectKind();
+    const tips = { 'vite-react':'Vercel o Netlify', 'nextjs':'Vercel', 'node-express':'Railway o Render', 'node':'Railway o Render' };
+    toast('↑ Progetto ' + kind + ' — usa ' + (tips[kind]||'un hosting Node') + ' per il deploy', 'ok');
+  } else {
+    toast('↑ Usa Netlify, Vercel o GitHub Pages per il deploy','ok');
+  }
+}
 
 // ══════════════════════════════════
 // API KEY
