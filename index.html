@@ -1368,6 +1368,7 @@ body::after {
 .job-status.fix,.job-status.quality_fix { background:rgba(255,159,28,0.12); color:#FF9F1C; }
 .job-status.quality_review { background:rgba(139,92,246,0.12); color:#A78BFA; }
 .job-status.done { background:rgba(16,185,129,0.12); color:#10B981; }
+.job-status.incomplete { background:rgba(245,158,11,0.12); color:#F59E0B; }
 .job-status.failed,.job-status.cancelled { background:rgba(239,68,68,0.12); color:#EF4444; }
 .job-title { font-size:12px; color:#A1A1AA; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .job-attempt { font-size:10px; color:rgba(255,255,255,0.2); font-family:'JetBrains Mono',monospace; flex-shrink:0; }
@@ -2910,19 +2911,22 @@ async function runAgents(prompt,mode,qual) {
             if (job.status !== 'DONE') updateJob(job, { status: 'DONE' });
           }
         } else {
-          updateJob(job, { status: 'DONE' });
+          const finalStatus = (job.qualityPassed === false) ? 'INCOMPLETE' : 'DONE';
+          updateJob(job, { status: finalStatus });
         }
 
         // SNAPSHOT after all batches
         saveSnapshot('Post-job: ' + prompt.slice(0, 40), job.id);
 
         const qIssues = job.qualityIssues ? ' ⚠️ ' + job.qualityIssues.length + ' quality issues' : '';
-        const msg = '✅ **Progetto completato!** ' + batchResult.totalFiles + ' file generati (' +
+        const qFailed = job.qualityPassed === false;
+        const statusIcon = qFailed ? '⚠️' : '✅';
+        const msg = statusIcon + ' **Progetto ' + (qFailed ? 'incompleto' : 'completato') + '!** ' + batchResult.totalFiles + ' file generati (' +
           batchResult.totalLines + ' righe totali)' +
           (batchResult.completed ? '' : ' — generazione parziale') + qIssues;
         renderBbl('ai', msg);
-        saveMsg('ai', '✅ ' + batchResult.totalFiles + ' file, ' + batchResult.totalLines + ' righe.' + qIssues);
-        toast('✅ Generazione completata', 'ok');
+        saveMsg('ai', statusIcon + ' ' + batchResult.totalFiles + ' file, ' + batchResult.totalLines + ' righe.' + qIssues);
+        toast(statusIcon + ' Generazione ' + (qFailed ? 'incompleta' : 'completata'), qFailed ? 'warn' : 'ok');
       }
 
     } else {
@@ -3015,19 +3019,22 @@ async function runAgents(prompt,mode,qual) {
           if (job.status !== 'DONE') updateJob(job, { status: 'DONE' });
         }
       } else {
-        updateJob(job, { status: 'DONE' });
+        const finalStatus = (job.qualityPassed === false) ? 'INCOMPLETE' : 'DONE';
+        updateJob(job, { status: finalStatus });
       }
 
       saveSnapshot('Post-job: ' + prompt.slice(0, 40), job.id);
 
       const qIssues = job.qualityIssues ? ' ⚠️ ' + job.qualityIssues.length + ' quality issues' : '';
+      const qFailed = job.qualityPassed === false;
+      const statusIcon = qFailed ? '⚠️' : '✅';
       const fileNames = result.changedFiles.join(', ');
       const msg = parsed.type === 'json'
-        ? `✅ **${result.changedFiles.length} file** generati (${result.totalLines} righe totali): ${fileNames}${result.summary ? '\n\n' + result.summary : ''}${qIssues}`
-        : `✅ Completato — **${result.totalLines} righe** di codice ${mode.toUpperCase()}.${qIssues}`;
+        ? `${statusIcon} **${result.changedFiles.length} file** generati (${result.totalLines} righe totali): ${fileNames}${result.summary ? '\n\n' + result.summary : ''}${qIssues}`
+        : `${statusIcon} ${qFailed ? 'Incompleto' : 'Completato'} — **${result.totalLines} righe** di codice ${mode.toUpperCase()}.${qIssues}`;
       renderBbl('ai', msg);
-      saveMsg('ai', `✅ ${result.changedFiles.length} file, ${result.totalLines} righe.${qIssues}`);
-      toast('✅ Generazione completata','ok');
+      saveMsg('ai', `${statusIcon} ${result.changedFiles.length} file, ${result.totalLines} righe.${qIssues}`);
+      toast(statusIcon + (qFailed ? ' Incompleto' : ' Generazione completata'), qFailed ? 'warn' : 'ok');
 
       if (result.nextBatch && result.nextBatch.needed) {
         showNextBatchBtn(result.nextBatch, mode, qual);
@@ -3787,10 +3794,30 @@ STRATEGIA SCAFFOLD-FIRST:
 
 REQUISITI:
 1. UI/UX professionale con Google Fonts, CSS custom properties, dark mode, animazioni fluide.
-2. Funzionalità COMPLETE — nessun placeholder. Logica reale funzionante.
-3. Responsivo mobile-first. Error handling robusto.
+2. Funzionalità COMPLETE — nessun placeholder, nessun TODO, nessun corpo funzione vuoto. Logica reale funzionante.
+3. Responsivo mobile-first con flex/grid layout. Error handling robusto.
 4. Per React/Vite: componenti separati, hooks, state management.
 5. Per Express: routes separate, middleware, dati di esempio realistici.
+
+BASELINE GRAFICA OBBLIGATORIA (per qualsiasi progetto con UI):
+- CSS custom properties: --primary, --bg, --surface, --text, --radius, --shadow (mai valori hardcoded ovunque)
+- Background: MAI bianco grezzo (#fff). Usa colori scuri, gradienti sottili, o sfumature (#0f0f23, #1a1a2e, #f8f9fa per light)
+- Tipografia: Google Fonts (Inter, Poppins, Outfit, ecc.) con gerarchia chiara h1>h2>h3>p
+- Card/Container: background surface distinto, border-radius 12-16px, box-shadow sottile
+- Bottoni: padding 10px 20px+, border-radius, colore primario, hover con scale/brightness, transizione 0.2s
+- Input: bordo, padding 10px+, border-radius, focus ring visibile
+- Layout: display flex/grid con gap consistente, container centrato con max-width
+- Transizioni: transition 0.2s ease su hover, focus, active per tutti gli elementi interattivi
+- Media query: almeno @media (max-width: 768px)
+- Mai aspetto "plain HTML page" — ogni elemento deve avere styling visivo curato
+
+REGOLE ANTI-BUG FUNZIONALI:
+- Ogni funzione referenziata da onclick/addEventListener DEVE essere definita nel codice
+- Ogni getElementById("X") DEVE avere un elemento con id="X" nel markup
+- Ogni import locale ('./file') DEVE corrispondere a un file esistente nel progetto
+- Script in <head> che accedono al DOM DEVONO avere defer o usare DOMContentLoaded
+- MAI funzioni con corpo vuoto — implementa logica reale
+- MAI alert() o console.log() come implementazione finale
 
 ${isEdit ? `MODIFICA progetto esistente. File attuali: ${fileList}
 Modifica SOLO i file necessari — non rigenerare file non toccati.` : 'Crea da zero un progetto COMPLETO.'}
@@ -4666,7 +4693,7 @@ REGOLA ASSOLUTA: SOLO codice puro. Zero spiegazioni, zero markdown, zero backtic
 }
 
 // ══════════════════════════════════
-// PROJECT QUALITY GATE (v8j-qg)
+// PROJECT QUALITY GATE (v8j-qg-v2)
 // ══════════════════════════════════
 
 // Determine if the user request is "complex" (deserves strict quality gate)
@@ -4675,36 +4702,241 @@ function isComplexRequest(prompt) {
     'dashboard', 'sidebar', 'login', 'auth', 'register', 'signup',
     'crud', 'database', 'storage', 'persist', 'localstorage', 'indexeddb',
     'react', 'vite', 'next', 'vue', 'angular', 'svelte',
-    'responsive', 'modern', 'professional', 'production',
+    'responsive', 'modern', 'professional', 'production', 'polished', 'clean',
     'multi-file', 'multi file', 'component', 'routing', 'router',
     'card', 'cards', 'modal', 'tab', 'tabs', 'form', 'table',
     'chart', 'graph', 'api', 'fetch', 'drag', 'drop',
     'animation', 'transition', 'theme', 'dark mode',
     'e-commerce', 'ecommerce', 'shop', 'cart', 'checkout',
     'kanban', 'calendar', 'editor', 'cms', 'blog',
-    'notification', 'real-time', 'socket', 'chat'
+    'notification', 'real-time', 'socket', 'chat',
+    'notes app', 'todo app', 'task', 'project manager', 'tracker'
   ];
   const low = (prompt || '').toLowerCase();
   return markers.filter(m => low.includes(m)).length >= 2;
 }
 
-// Local static analysis of project quality
+// Determine if the user wants a visually polished / modern UI
+function needsModernUI(prompt) {
+  const uiMarkers = [
+    'modern', 'polished', 'clean ui', 'beautiful', 'professional',
+    'dashboard', 'notes app', 'responsive', 'cards', 'sidebar',
+    'dark mode', 'elegant', 'sleek', 'premium', 'styled',
+    'tailwind', 'material', 'glassmorphism', 'gradient',
+    'kanban', 'calendar', 'editor', 'portfolio', 'landing'
+  ];
+  const low = (prompt || '').toLowerCase();
+  return uiMarkers.some(m => low.includes(m)) || isComplexRequest(prompt);
+}
+
+// ── FUNCTIONAL CHECKS (deep static analysis) ──
+function runFunctionalChecks(files, fileKeys, allContent) {
+  const issues = [];
+
+  // 1. onclick/handler references → verify function exists
+  for (const [path, content] of Object.entries(files)) {
+    if (!/\.(html|jsx|tsx|vue)$/.test(path)) continue;
+    // onclick="fn()"
+    const onclickRefs = [...(content.matchAll(/onclick\s*=\s*"(\w+)\s*\(/g) || [])].map(m => m[1]);
+    // addEventListener('click', fn)
+    const addEvtRefs = [...(content.matchAll(/addEventListener\s*\(\s*['"][^'"]+['"]\s*,\s*(\w+)/g) || [])].map(m => m[1]);
+    // onchange, onsubmit, oninput etc
+    const otherHandlers = [...(content.matchAll(/on(?:change|submit|input|keydown|keyup|keypress|focus|blur|mouseover|mouseout)\s*=\s*"(\w+)\s*\(/g) || [])].map(m => m[1]);
+    const allRefs = [...new Set([...onclickRefs, ...addEvtRefs, ...otherHandlers])];
+    for (const fn of allRefs) {
+      if (['alert', 'confirm', 'prompt', 'console', 'event', 'e', 'this', 'window', 'document', 'history', 'location', 'navigator', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'requestAnimationFrame', 'fetch', 'JSON', 'Math', 'Date', 'Array', 'Object', 'String', 'Number', 'Boolean', 'parseInt', 'parseFloat'].includes(fn)) continue;
+      const fnDef = new RegExp('function\\s+' + fn + '\\b|(?:const|let|var)\\s+' + fn + '\\s*=|' + fn + '\\s*\\(.*\\)\\s*\\{', 'm');
+      if (!fnDef.test(allContent)) {
+        issues.push({ severity: 'high', type: 'MISSING_HANDLER', message: 'Handler "' + fn + '()" referenziato in ' + path + ' ma mai definito.', files: [path] });
+      }
+    }
+  }
+
+  // 2. getElementById / querySelector → verify target exists in HTML
+  for (const [path, content] of Object.entries(files)) {
+    if (!/\.(html|js|jsx|tsx)$/.test(path)) continue;
+    const getByIdRefs = [...(content.matchAll(/getElementById\s*\(\s*['"]([^'"]+)['"]\s*\)/g) || [])].map(m => m[1]);
+    for (const id of getByIdRefs) {
+      const idInMarkup = new RegExp('id\\s*=\\s*["\']' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '["\']');
+      if (!idInMarkup.test(allContent)) {
+        issues.push({ severity: 'high', type: 'MISSING_DOM_ELEMENT', message: 'getElementById("' + id + '") in ' + path + ' ma nessun elemento con id="' + id + '" nel markup.', files: [path] });
+      }
+    }
+  }
+
+  // 3. Import/export coherence (enhanced)
+  if (fileKeys.length > 2) {
+    for (const [path, content] of Object.entries(files)) {
+      // ES imports: import X from './Y'
+      const esImports = [...(content.matchAll(/(?:import\s+.+?\s+from\s+['"])\.\/([^'"]+)['"]/g) || [])].map(m => m[1]);
+      // require('./Y')
+      const cjsImports = [...(content.matchAll(/require\s*\(\s*['"]\.\/([^'"]+)['"]\s*\)/g) || [])].map(m => m[1]);
+      for (const imp of [...esImports, ...cjsImports]) {
+        const dir = path.includes('/') ? path.substring(0, path.lastIndexOf('/') + 1) : '';
+        const candidates = [imp, imp + '.js', imp + '.jsx', imp + '.tsx', imp + '.ts', imp + '.mjs', imp + '.css',
+          imp + '/index.js', imp + '/index.jsx', imp + '/index.tsx', imp + '/index.ts'];
+        const found = candidates.some(c => files[dir + c]);
+        if (!found) {
+          issues.push({ severity: 'high', type: 'BROKEN_IMPORT', message: 'Import "./' + imp + '" in ' + path + ' punta a un file inesistente.', files: [path] });
+        }
+      }
+    }
+  }
+
+  // 4. HTML referencing CSS/JS files that don't exist
+  for (const [path, content] of Object.entries(files)) {
+    if (!path.endsWith('.html')) continue;
+    const cssRefs = [...(content.matchAll(/<link[^>]+href\s*=\s*["'](?!https?:\/\/)([^"']+\.css)["']/g) || [])].map(m => m[1]);
+    const jsRefs = [...(content.matchAll(/<script[^>]+src\s*=\s*["'](?!https?:\/\/)([^"']+\.js)["']/g) || [])].map(m => m[1]);
+    const dir = path.includes('/') ? path.substring(0, path.lastIndexOf('/') + 1) : '';
+    for (const ref of [...cssRefs, ...jsRefs]) {
+      const resolved = ref.startsWith('/') ? ref.slice(1) : dir + ref;
+      if (!files[resolved] && !files[ref]) {
+        issues.push({ severity: 'high', type: 'MISSING_ASSET', message: path + ' referenzia "' + ref + '" ma il file non esiste nel progetto.', files: [path, ref] });
+      }
+    }
+  }
+
+  // 5. Script load order — defer/module detection (basic)
+  for (const [path, content] of Object.entries(files)) {
+    if (!path.endsWith('.html')) continue;
+    // Check if scripts in <head> without defer/async reference DOM
+    const headMatch = content.match(/<head[\s\S]*?<\/head>/i);
+    if (headMatch) {
+      const headScripts = [...(headMatch[0].matchAll(/<script(?![^>]*(?:defer|async|type\s*=\s*["']module["']))[^>]*>([\s\S]*?)<\/script>/gi) || [])];
+      for (const s of headScripts) {
+        if (s[1] && /(?:getElementById|querySelector|document\.body|\.addEventListener)/.test(s[1])) {
+          issues.push({ severity: 'medium', type: 'SCRIPT_LOAD_ORDER', message: 'Script in <head> di ' + path + ' accede al DOM senza defer/async — potrebbe fallire.' });
+          break;
+        }
+      }
+    }
+  }
+
+  // 6. Empty/stub function bodies
+  for (const [path, content] of Object.entries(files)) {
+    if (!/\.(js|jsx|tsx|ts|html)$/.test(path)) continue;
+    // function foo() {} or const foo = () => {}
+    const emptyFns = content.match(/function\s+\w+\s*\([^)]*\)\s*\{\s*\}/g) || [];
+    const emptyArrows = content.match(/(?:const|let)\s+\w+\s*=\s*(?:\([^)]*\)|[^=]+)\s*=>\s*\{\s*\}/g) || [];
+    const total = emptyFns.length + emptyArrows.length;
+    if (total >= 3) {
+      issues.push({ severity: 'high', type: 'EMPTY_FUNCTIONS', message: path + ' ha ' + total + ' funzioni con corpo vuoto — logica non implementata.', files: [path] });
+    }
+  }
+
+  return issues;
+}
+
+// ── UI BASELINE CHECK (modern visual quality) ──
+function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
+  const issues = [];
+  const wantsModern = needsModernUI(prompt);
+  if (!wantsModern) return issues; // Skip for simple requests
+
+  // Gather all CSS (inline <style> + .css files)
+  const cssBlocks = (allContent.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || []).map(m => m.replace(/<\/?style[^>]*>/gi, ''));
+  const cssFileContents = fileKeys.filter(f => f.endsWith('.css')).map(f => files[f] || '');
+  const allCss = [...cssBlocks, ...cssFileContents].join('\n');
+  const cssLines = allCss.split('\n').filter(l => l.trim()).length;
+
+  // 1. CSS quantity baseline
+  const markupLines = fileKeys.filter(f => /\.(html|jsx|tsx|vue)$/.test(f))
+    .reduce((sum, f) => sum + (files[f] || '').split('\n').length, 0);
+  if (cssLines < 25 && markupLines > 40) {
+    issues.push({ severity: 'high', type: 'UI_TOO_BASIC',
+      message: 'Solo ' + cssLines + ' righe CSS per ' + markupLines + ' righe di markup. UI troppo basilare per una richiesta moderna.' });
+  }
+
+  // 2. Background check — no raw white default
+  const hasBgColor = /background(?:-color)?\s*:\s*(?!(?:#fff(?:fff)?|white|rgba?\(255))/i.test(allCss);
+  const hasBgGradient = /background.*gradient/i.test(allCss);
+  const hasBodyBg = /body\s*\{[^}]*background/i.test(allCss);
+  const hasCSSVarBg = /--.*(?:bg|background)/i.test(allCss);
+  if (!hasBgColor && !hasBgGradient && !hasBodyBg && !hasCSSVarBg && cssLines > 0) {
+    issues.push({ severity: 'high', type: 'STYLING_INSUFFICIENT',
+      message: 'Nessun background definito — sfondo bianco grezzo di default. Serve una palette colori.' });
+  }
+
+  // 3. Typography — font-family beyond defaults
+  const hasCustomFont = /font-family\s*:\s*(?!.*(?:serif|sans-serif|monospace|inherit|initial|unset)\s*[;}])/i.test(allCss);
+  const hasGoogleFont = /@import.*fonts\.googleapis|link.*fonts\.googleapis/i.test(allContent);
+  const hasFontVar = /--.*font/i.test(allCss);
+  if (!hasCustomFont && !hasGoogleFont && !hasFontVar) {
+    issues.push({ severity: 'medium', type: 'STYLING_INSUFFICIENT',
+      message: 'Nessun font custom caricato. Serve Google Fonts o font-family curata per UI moderna.' });
+  }
+
+  // 4. Visual hierarchy — must have some shadows, border-radius, or visual depth
+  const hasShadow = /box-shadow/i.test(allCss);
+  const hasBorderRadius = /border-radius\s*:\s*(?!0)/i.test(allCss);
+  const hasTransition = /transition/i.test(allCss);
+  const visualDepthCount = [hasShadow, hasBorderRadius, hasTransition].filter(Boolean).length;
+  if (visualDepthCount === 0) {
+    issues.push({ severity: 'high', type: 'MODERN_UI_REQUIREMENTS_NOT_MET',
+      message: 'Nessun box-shadow, border-radius o transition. UI piatta/prototipale.' });
+  } else if (visualDepthCount === 1 && cssLines < 60) {
+    issues.push({ severity: 'medium', type: 'MODERN_UI_REQUIREMENTS_NOT_MET',
+      message: 'Profondità visiva minima (solo ' + visualDepthCount + '/3 tra shadow, radius, transition). UI probabilmente poco curata.' });
+  }
+
+  // 5. Interactive states — hover/focus/active
+  const hasHover = /:hover/i.test(allCss);
+  const hasFocus = /:focus/i.test(allCss);
+  if (!hasHover && !hasFocus) {
+    issues.push({ severity: 'medium', type: 'STYLING_INSUFFICIENT',
+      message: 'Nessuno stato :hover o :focus definito. Interazioni piatte.' });
+  }
+
+  // 6. Responsive — media queries or flex/grid layout
+  const hasMediaQuery = /@media/i.test(allCss);
+  const hasFlex = /display\s*:\s*flex/i.test(allCss);
+  const hasGrid = /display\s*:\s*grid/i.test(allCss);
+  if (!hasMediaQuery && !hasFlex && !hasGrid) {
+    issues.push({ severity: 'high', type: 'UI_TOO_BASIC',
+      message: 'Nessun layout flex/grid né media query. UI non responsive.' });
+  }
+
+  // 7. CSS custom properties / design tokens (for complex projects)
+  if (isComplexRequest(prompt)) {
+    const hasCssVars = /--[\w-]+\s*:/i.test(allCss);
+    if (!hasCssVars && cssLines > 30) {
+      issues.push({ severity: 'medium', type: 'STYLING_INSUFFICIENT',
+        message: 'Nessuna CSS custom property (design tokens). Palette non sistematica.' });
+    }
+  }
+
+  // 8. Buttons/inputs styling
+  const hasButtonStyle = /button|\.btn|input\[type/i.test(allCss);
+  if (!hasButtonStyle && /(<button|<input)/i.test(allContent)) {
+    issues.push({ severity: 'medium', type: 'STYLING_INSUFFICIENT',
+      message: 'Bottoni/input presenti nel markup ma non stilizzati nel CSS.' });
+  }
+
+  return issues;
+}
+
+// ── MAIN REVIEW: combines all checks ──
 function reviewProjectQuality(job, plan, prompt) {
   const files = S.cur?.files || {};
   const fileKeys = Object.keys(files);
   const issues = [];
   const isComplex = isComplexRequest(prompt);
+  const allContent = Object.values(files).join('\n');
+
+  // ═══ STRUCTURAL CHECKS ═══
+  addLog('test', '🔎', 'Functional Check', 'Analisi strutturale progetto…');
 
   // 1. Planned files vs actually created
   if (plan && plan.fileTree && plan.fileTree.length > 0) {
     const missing = plan.fileTree.filter(f => !files[f] || files[f].trim().length < 30);
     if (missing.length > 0) {
-      issues.push({ severity: 'high', type: 'missing-files', message: 'File dal piano non generati o vuoti: ' + missing.join(', '), files: missing });
+      issues.push({ severity: 'high', type: 'MISSING_FILES', message: 'File dal piano non generati o vuoti: ' + missing.join(', '), files: missing });
     }
   }
 
   // 2. Placeholder / stub / TODO detection
-  const stubPatterns = [/TODO[:\s]/gi, /FIXME/gi, /placeholder/gi, /lorem ipsum/gi, /stub/gi, /not implemented/gi, /coming soon/gi];
+  const stubPatterns = [/TODO[:\s]/gi, /FIXME/gi, /placeholder/gi, /lorem ipsum/gi, /\bstub\b/gi, /not implemented/gi, /coming soon/gi];
   const stubFiles = [];
   for (const [path, content] of Object.entries(files)) {
     let stubCount = 0;
@@ -4716,35 +4948,20 @@ function reviewProjectQuality(job, plan, prompt) {
     if (stubCount >= 3) stubFiles.push({ path, count: stubCount });
   }
   if (stubFiles.length > 0) {
-    issues.push({ severity: 'high', type: 'placeholders', message: 'File con troppi placeholder/TODO/stub: ' + stubFiles.map(f => f.path + '(' + f.count + ')').join(', '), files: stubFiles.map(f => f.path) });
+    issues.push({ severity: 'high', type: 'PLACEHOLDERS', message: 'File con troppi placeholder/TODO/stub: ' + stubFiles.map(f => f.path + '(' + f.count + ')').join(', '), files: stubFiles.map(f => f.path) });
   }
 
-  // 3. CSS quality check
-  const allContent = Object.values(files).join('\n');
-  const cssInFiles = allContent.match(/<style[\s\S]*?<\/style>/gi) || [];
-  const cssFiles = fileKeys.filter(f => f.endsWith('.css'));
-  const totalCssLines = cssInFiles.reduce((sum, block) => sum + block.split('\n').length, 0) +
-    cssFiles.reduce((sum, f) => sum + (files[f] || '').split('\n').length, 0);
-  const totalHtmlLines = fileKeys.filter(f => f.endsWith('.html') || f.endsWith('.jsx') || f.endsWith('.tsx') || f.endsWith('.vue'))
-    .reduce((sum, f) => sum + (files[f] || '').split('\n').length, 0);
-
-  if (isComplex && totalCssLines < 20 && totalHtmlLines > 50) {
-    issues.push({ severity: 'high', type: 'minimal-css', message: 'CSS troppo minimale (' + totalCssLines + ' righe) per un progetto complesso (' + totalHtmlLines + ' righe di markup). Serve styling strutturato.' });
-  } else if (isComplex && totalCssLines < 40 && totalHtmlLines > 100) {
-    issues.push({ severity: 'medium', type: 'low-css', message: 'Rapporto CSS/markup molto basso (' + totalCssLines + '/' + totalHtmlLines + '). UI probabilmente poco stilizzata.' });
-  }
-
-  // 4. Feature keywords check — verify requested features actually appear in code
+  // 3. Feature keywords check
   if (isComplex) {
     const featureChecks = [
       { keywords: ['sidebar', 'side-bar'], patterns: [/sidebar/i, /side-bar/i, /aside/i, /nav.*vertical/i, /drawer/i] },
       { keywords: ['login', 'signin', 'sign-in'], patterns: [/login/i, /sign.?in/i, /password/i, /authenticate/i] },
-      { keywords: ['dashboard'], patterns: [/dashboard/i, /widget/i, /stat.*card/i, /overview/i] },
+      { keywords: ['dashboard'], patterns: [/dashboard/i, /widget/i, /stat.*card/i, /overview/i, /\.card/i] },
       { keywords: ['card', 'cards'], patterns: [/\.card/i, /card-/i, /card_/i, /Card/] },
       { keywords: ['modal', 'dialog', 'popup'], patterns: [/modal/i, /dialog/i, /overlay/i, /popup/i] },
       { keywords: ['chart', 'graph', 'grafico'], patterns: [/chart/i, /graph/i, /canvas/i, /svg.*path/i, /recharts/i, /chart\.js/i] },
       { keywords: ['localstorage', 'storage', 'persist', 'salva'], patterns: [/localStorage/i, /sessionStorage/i, /indexedDB/i, /\.setItem/i, /persist/i] },
-      { keywords: ['responsive'], patterns: [/@media/i, /flex/i, /grid/i, /responsive/i, /min-width/i, /max-width/i] },
+      { keywords: ['responsive'], patterns: [/@media/i, /display\s*:\s*flex/i, /display\s*:\s*grid/i] },
       { keywords: ['router', 'routing', 'pagine', 'navigazione'], patterns: [/react-router/i, /createBrowserRouter/i, /Route/i, /useNavigate/i, /router/i, /hashchange/i] },
       { keywords: ['form', 'modulo', 'input'], patterns: [/<form/i, /<input/i, /onSubmit/i, /handleSubmit/i, /onChange/i] },
       { keywords: ['table', 'tabella'], patterns: [/<table/i, /<th/i, /\.table/i, /grid.*row/i] },
@@ -4754,54 +4971,43 @@ function reviewProjectQuality(job, plan, prompt) {
     const promptLow = (prompt || '').toLowerCase();
     const missingFeatures = [];
     for (const fc of featureChecks) {
-      const requested = fc.keywords.some(kw => promptLow.includes(kw));
-      if (requested) {
-        const found = fc.patterns.some(pat => pat.test(allContent));
-        if (!found) missingFeatures.push(fc.keywords[0]);
+      if (fc.keywords.some(kw => promptLow.includes(kw))) {
+        if (!fc.patterns.some(pat => pat.test(allContent))) missingFeatures.push(fc.keywords[0]);
       }
     }
     if (missingFeatures.length > 0) {
-      issues.push({ severity: 'high', type: 'missing-features', message: 'Feature richieste ma non trovate nel codice: ' + missingFeatures.join(', '), features: missingFeatures });
+      issues.push({ severity: 'high', type: 'MISSING_FEATURES', message: 'Feature richieste ma non trovate nel codice: ' + missingFeatures.join(', '), features: missingFeatures });
     }
   }
 
-  // 5. Unconnected JS events (onclick/addEventListener referencing missing functions)
-  for (const [path, content] of Object.entries(files)) {
-    if (!path.endsWith('.html') && !path.endsWith('.jsx') && !path.endsWith('.tsx')) continue;
-    const onclickRefs = [...(content.matchAll(/onclick="(\w+)\(/g) || [])].map(m => m[1]);
-    for (const fn of onclickRefs) {
-      const fnDef = new RegExp('function\\s+' + fn + '\\s*\\(|const\\s+' + fn + '\\s*=|let\\s+' + fn + '\\s*=|var\\s+' + fn + '\\s*=');
-      if (!fnDef.test(allContent)) {
-        issues.push({ severity: 'medium', type: 'missing-handler', message: 'Handler "' + fn + '()" usato in ' + path + ' ma non definito nel progetto.' });
-      }
-    }
-  }
-
-  // 6. Import/export coherence for multi-file projects
-  if (fileKeys.length > 3) {
-    for (const [path, content] of Object.entries(files)) {
-      const imports = [...(content.matchAll(/(?:import .+ from ['"])\.\/([^'"]+)['"]/g) || [])].map(m => m[1]);
-      for (const imp of imports) {
-        const candidates = [imp, imp + '.js', imp + '.jsx', imp + '.tsx', imp + '.ts', imp + '/index.js', imp + '/index.jsx', imp + '/index.tsx'];
-        // Resolve relative to the importing file's directory
-        const dir = path.includes('/') ? path.substring(0, path.lastIndexOf('/') + 1) : '';
-        const found = candidates.some(c => files[dir + c]);
-        if (!found) {
-          issues.push({ severity: 'medium', type: 'broken-import', message: 'Import "./' + imp + '" in ' + path + ' non ha un file corrispondente.' });
-        }
-      }
-    }
-  }
-
-  // 7. UI too basic for complex request (very short main HTML/JSX)
+  // 4. UI skeleton check (very short main files)
   if (isComplex) {
     const mainFiles = fileKeys.filter(f => f === 'index.html' || f.includes('App.jsx') || f.includes('App.tsx') || f.includes('page.jsx'));
     for (const mf of mainFiles) {
       const lines = (files[mf] || '').split('\n').length;
-      if (lines < 30) {
-        issues.push({ severity: 'medium', type: 'skeleton-ui', message: 'File principale "' + mf + '" ha solo ' + lines + ' righe — probabilmente scheletro non funzionale.' });
+      if (lines < 25) {
+        issues.push({ severity: 'high', type: 'SKELETON_UI', message: 'File principale "' + mf + '" ha solo ' + lines + ' righe — scheletro non funzionale.', files: [mf] });
       }
     }
+  }
+
+  // ═══ FUNCTIONAL CHECKS (deep) ═══
+  const funcIssues = runFunctionalChecks(files, fileKeys, allContent);
+  issues.push(...funcIssues);
+  if (funcIssues.length > 0) {
+    addLog('test', '⚠️', 'Functional Check', funcIssues.length + ' problemi funzionali trovati.');
+  } else {
+    addLog('test', '✅', 'Functional Check', 'Nessun problema funzionale rilevato.');
+  }
+
+  // ═══ UI BASELINE CHECK ═══
+  addLog('test', '🎨', 'UI Baseline', 'Verifica qualità visiva…');
+  const uiIssues = runUIBaselineCheck(files, fileKeys, allContent, prompt);
+  issues.push(...uiIssues);
+  if (uiIssues.length > 0) {
+    addLog('test', '⚠️', 'UI Baseline', uiIssues.length + ' problemi di qualità visiva trovati.');
+  } else {
+    addLog('test', '✅', 'UI Baseline', 'Qualità visiva OK.');
   }
 
   // Deduplicate
@@ -4813,16 +5019,18 @@ function reviewProjectQuality(job, plan, prompt) {
     return true;
   });
 
+  const highCount = unique.filter(i => i.severity === 'high').length;
+  const mediumCount = unique.filter(i => i.severity === 'medium').length;
   return {
     isComplex,
     issues: unique,
-    highCount: unique.filter(i => i.severity === 'high').length,
-    mediumCount: unique.filter(i => i.severity === 'medium').length,
-    passed: unique.filter(i => i.severity === 'high').length === 0
+    highCount,
+    mediumCount,
+    passed: highCount === 0
   };
 }
 
-// AI-powered quality fix pass
+// ── AI-POWERED QUALITY FIX PASS (v2: stronger, focused) ──
 async function runQualityFixPass(job, plan, prompt, mode, qual, qReport) {
   if (!S.currentJob || S.currentJob.id !== job.id) return false;
 
@@ -4832,43 +5040,90 @@ async function runQualityFixPass(job, plan, prompt, mode, qual, qReport) {
   const files = S.cur?.files || {};
   const fileKeys = Object.keys(files);
 
-  // Gather the most relevant file contents for context (budget ~20k chars)
+  // Identify which files need fixing (mentioned in issues + CSS/UI files for visual issues)
+  const issueFiles = new Set();
+  const hasUIIssues = qReport.issues.some(i => ['UI_TOO_BASIC','STYLING_INSUFFICIENT','MODERN_UI_REQUIREMENTS_NOT_MET'].includes(i.type));
+  const hasFuncIssues = qReport.issues.some(i => ['MISSING_HANDLER','MISSING_DOM_ELEMENT','BROKEN_IMPORT','MISSING_ASSET','SCRIPT_LOAD_ORDER','EMPTY_FUNCTIONS'].includes(i.type));
+
+  for (const iss of qReport.issues) {
+    if (iss.files) iss.files.forEach(f => issueFiles.add(f));
+  }
+  // Always include main UI files if visual issues exist
+  if (hasUIIssues) {
+    ['index.html', 'style.css', 'styles.css', 'src/index.css', 'src/App.css', 'src/App.jsx', 'src/App.tsx', 'app/page.jsx', 'app/page.tsx', 'app/globals.css']
+      .filter(f => files[f]).forEach(f => issueFiles.add(f));
+  }
+
+  // Gather targeted file contents (budget ~24k chars — increased for quality fixes)
   let fileContext = '';
-  const BUDGET = 20000;
-  const priorityFiles = ['index.html', 'src/App.jsx', 'src/App.tsx', 'style.css', 'src/index.css', 'app/page.jsx', 'app/page.tsx'];
-  const orderedKeys = [...new Set([...priorityFiles.filter(f => files[f]), ...fileKeys])];
-  for (const f of orderedKeys) {
-    const add = '── ' + f + ' ──\n' + (files[f] || '').slice(0, 4000) + '\n\n';
+  const BUDGET = 24000;
+  const priorityOrder = [...issueFiles, ...fileKeys.filter(f => !issueFiles.has(f))];
+  for (const f of priorityOrder) {
+    if (!files[f]) continue;
+    const content = files[f];
+    const maxSlice = issueFiles.has(f) ? 6000 : 2000; // More context for problematic files
+    const add = '── ' + f + (issueFiles.has(f) ? ' [NEEDS FIX]' : '') + ' ──\n' + content.slice(0, maxSlice) + (content.length > maxSlice ? '\n/* … troncato … */' : '') + '\n\n';
     if (fileContext.length + add.length > BUDGET) break;
     fileContext += add;
   }
 
-  const issueList = qReport.issues.map((iss, i) => (i + 1) + '. [' + iss.severity.toUpperCase() + '] ' + iss.message).join('\n');
+  // Categorize issues for the prompt
+  const highIssues = qReport.issues.filter(i => i.severity === 'high');
+  const medIssues = qReport.issues.filter(i => i.severity === 'medium');
+  const issueList = [
+    ...highIssues.map((iss, i) => (i + 1) + '. [CRITICO] ' + iss.type + ': ' + iss.message),
+    ...medIssues.map((iss, i) => (highIssues.length + i + 1) + '. [MEDIO] ' + iss.type + ': ' + iss.message)
+  ].join('\n');
 
-  const fixSys = `Sei un SENIOR FULL-STACK DEVELOPER. Il progetto generato ha problemi di qualità che devi correggere.
-Il tuo obiettivo è rendere il progetto REALMENTE FUNZIONANTE e con UI PROFESSIONALE.
+  // Build a specialized system prompt based on issue types
+  const uiFixBlock = hasUIIssues ? `
+CORREZIONE UI OBBLIGATORIA — il progetto ha styling insufficiente. Devi:
+- Aggiungere CSS custom properties (--primary, --bg, --surface, --text, --radius, --shadow)
+- Background NON bianco: usa colore scuro o gradiente o pattern sottile
+- Font Google (Inter, Poppins, o simile) con gerarchia: h1 > h2 > h3 > p
+- Card/container con background surface, border-radius 12-16px, box-shadow
+- Bottoni con padding, border-radius, colore primario, hover/active states
+- Input con bordo, padding, focus ring
+- Layout con flex/grid, gap consistente
+- Transizioni smooth (0.2-0.3s ease)
+- Media query per mobile (max-width: 768px)
+- Se è dashboard/app: sidebar con bg scuro, main con bg leggermente diverso, stat cards visive` : '';
 
-REGOLE CRITICHE:
-- NON rigenerare tutto: correggi/migliora SOLO i file che hanno problemi
-- Se manca CSS: aggiungi styling moderno, completo, con colori, spacing, border-radius, shadows, responsive
-- Se mancano feature: implementale davvero, non con placeholder
-- Se ci sono stub/TODO: sostituiscili con codice reale funzionante
-- Se mancano handler JS: implementali
-- Se mancano import: aggiungili
-- Ogni file restituito deve essere COMPLETO (non parziale)
+  const funcFixBlock = hasFuncIssues ? `
+CORREZIONE FUNZIONALE OBBLIGATORIA — ci sono bug strutturali. Devi:
+- Implementare OGNI funzione referenziata che manca (non lasciare corpi vuoti)
+- Assicurati che ogni getElementById() abbia il suo elemento HTML
+- Correggi import che puntano a file inesistenti
+- Se un <link> o <script src> referenzia un file, crea quel file
+- Controlla ordine script: defer o DOMContentLoaded se accedono al DOM
+- Ogni handler deve avere logica reale, non un alert() o console.log()` : '';
+
+  const fixSys = `Sei un SENIOR FULL-STACK DEVELOPER e UI DESIGNER con 15 anni di esperienza.
+Il progetto generato ha problemi critici che devi correggere ORA.
+
+MISSIONE: rendere il progetto REALMENTE FUNZIONANTE e VISIVAMENTE PROFESSIONALE.
+${uiFixBlock}${funcFixBlock}
+
+REGOLE:
+- Restituisci SOLO i file che modifichi/crei — non tutti
+- Ogni file restituito deve essere il file COMPLETO, non una patch
+- Concentrati sui problemi CRITICI prima
+- NON usare placeholder, TODO, o alert() come implementazione
+- Se un file CSS esiste ma è troppo corto, restituiscilo COMPLETO e potenziato
+- Se un file JS ha funzioni vuote, implementale con logica REALE
 
 FORMATO OUTPUT — rispondi SOLO con JSON valido:
-{"summary":"cosa hai corretto","filesChanged":[{"path":"file.ext","action":"update","content":"contenuto completo file corretto"}]}`;
+{"summary":"elenco concreto di cosa hai corretto","filesChanged":[{"path":"file.ext","action":"update","content":"CONTENUTO COMPLETO del file corretto"}]}`;
 
   const fixMsg = `RICHIESTA UTENTE ORIGINALE: "${prompt}"
 
-PROBLEMI RILEVATI DAL QUALITY GATE:
+PROBLEMI DA CORREGGERE (${qReport.issues.length}):
 ${issueList}
 
-FILE ATTUALI DEL PROGETTO:
+FILE DEL PROGETTO (quelli marcati [NEEDS FIX] hanno priorità):
 ${fileContext}
 
-Correggi i problemi elencati. Concentrati sui problemi HIGH prima. Restituisci SOLO i file modificati/aggiunti.`;
+ISTRUZIONI: Correggi TUTTI i problemi CRITICI. Per i problemi UI, aggiungi styling completo e moderno. Per i problemi funzionali, implementa logica reale. Restituisci SOLO file modificati.`;
 
   try {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -4888,10 +5143,10 @@ Correggi i problemi elencati. Concentrati sui problemi HIGH prima. Restituisci S
       saveSnapshot('Pre-quality-fix', job.id);
       const result = applyJsonPatch(parsed, prompt);
       saveSnapshot('Post-quality-fix', job.id);
-      addLog('test', '✅', 'Quality Fix', result.changedFiles.length + ' file migliorati (' + result.totalLines + ' righe): ' + result.changedFiles.join(', '));
+      addLog('test', '✅', 'Quality Fix', result.changedFiles.length + ' file corretti (' + result.totalLines + ' righe): ' + result.changedFiles.join(', '));
       return true;
     } else {
-      addLog('test', '⚠️', 'Quality Fix', 'Fix pass non ha prodotto modifiche valide.');
+      addLog('test', '⚠️', 'Quality Fix', 'Fix pass non ha prodotto modifiche valide — risposta AI non parsabile.');
       return false;
     }
   } catch (e) {
@@ -4900,49 +5155,72 @@ Correggi i problemi elencati. Concentrati sui problemi HIGH prima. Restituisci S
   }
 }
 
-// Main quality gate orchestrator — call after generation, before DONE
+// ── QUALITY GATE ORCHESTRATOR (v2: retry + incomplete status) ──
+const QG_MAX_RETRIES = 2;
+
 async function runProjectQualityGate(job, plan, prompt, mode, qual) {
   if (!S.currentJob || S.currentJob.id !== job.id) return;
 
   addLog('test', '🔍', 'Quality Gate', 'Avvio revisione qualità progetto…');
   updateJob(job, { status: 'QUALITY_REVIEW' });
 
-  const qReport = reviewProjectQuality(job, plan, prompt);
+  let qReport = reviewProjectQuality(job, plan, prompt);
 
   if (qReport.issues.length === 0) {
-    addLog('test', '✅', 'Quality Gate', 'Nessun problema rilevato — quality gate superato!');
+    addLog('test', '✅', 'Quality Gate', 'FINAL_QUALITY passed — nessun problema rilevato!');
     return;
   }
 
   // Log all issues
   for (const iss of qReport.issues) {
     const icon = iss.severity === 'high' ? '🔴' : '🟡';
-    addLog('test', icon, 'Quality Gate', '[' + iss.severity.toUpperCase() + '] ' + iss.message);
+    addLog('test', icon, 'Quality Gate', '[' + iss.severity.toUpperCase() + '] ' + iss.type + ': ' + iss.message);
   }
 
   if (qReport.passed) {
-    // Only medium issues — log but pass
-    addLog('test', '🟡', 'Quality Gate', qReport.mediumCount + ' issue minori rilevate — quality gate superato con avvertimenti.');
+    addLog('test', '🟡', 'Quality Gate', 'FINAL_QUALITY passed con ' + qReport.mediumCount + ' avvertimenti.');
     return;
   }
 
-  // High severity issues found — run fix pass
-  addLog('test', '🔴', 'Quality Gate', qReport.highCount + ' problemi critici — avvio fix pass finale…');
-  renderBbl('ai', '🔍 **Quality Gate**: ' + qReport.highCount + ' problemi critici trovati. Avvio correzione automatica…');
+  // ── FIX LOOP (up to QG_MAX_RETRIES) ──
+  for (let attempt = 1; attempt <= QG_MAX_RETRIES; attempt++) {
+    if (!S.currentJob || S.currentJob.id !== job.id) return;
 
-  const fixed = await runQualityFixPass(job, plan, prompt, mode, qual, qReport);
+    addLog('test', '🔴', 'Quality Gate', 'QUALITY_FIX retry ' + attempt + '/' + QG_MAX_RETRIES + ' — ' + qReport.highCount + ' problemi critici…');
+    renderBbl('ai', '🔍 **Quality Gate**: ' + qReport.highCount + ' problemi critici. Correzione automatica (' + attempt + '/' + QG_MAX_RETRIES + ')…');
 
-  // Re-check after fix
-  const recheck = reviewProjectQuality(job, plan, prompt);
-  if (recheck.passed) {
-    addLog('test', '✅', 'Quality Gate', 'Dopo fix: quality gate superato!');
-    renderBbl('ai', '✅ **Quality Gate superato** dopo correzione automatica.');
-  } else {
-    const remaining = recheck.issues.filter(i => i.severity === 'high');
-    addLog('test', '⚠️', 'Quality Gate', 'Dopo fix: ' + remaining.length + ' problemi critici restanti. Progetto segnalato come incompleto.');
-    renderBbl('ai', '⚠️ **Quality Gate**: ' + remaining.length + ' problemi residui. Il progetto potrebbe richiedere ulteriori miglioramenti.');
-    updateJob(job, { qualityIssues: remaining.map(i => i.message) });
+    const fixed = await runQualityFixPass(job, plan, prompt, mode, qual, qReport);
+
+    if (!fixed) {
+      addLog('test', '⚠️', 'Quality Gate', 'Fix pass ' + attempt + ' non ha prodotto risultati.');
+      if (attempt === QG_MAX_RETRIES) break;
+      continue;
+    }
+
+    // Re-check
+    updateJob(job, { status: 'QUALITY_REVIEW' });
+    qReport = reviewProjectQuality(job, plan, prompt);
+
+    if (qReport.passed) {
+      addLog('test', '✅', 'Quality Gate', 'FINAL_QUALITY passed dopo fix pass ' + attempt + '!');
+      renderBbl('ai', '✅ **Quality Gate superato** dopo correzione automatica.');
+      return;
+    }
+
+    // Log remaining issues
+    for (const iss of qReport.issues.filter(i => i.severity === 'high')) {
+      addLog('test', '🔴', 'Quality Gate', '[RESIDUO] ' + iss.type + ': ' + iss.message);
+    }
   }
+
+  // ── FAILED: mark as incomplete ──
+  const remaining = qReport.issues.filter(i => i.severity === 'high');
+  addLog('test', '❌', 'Quality Gate', 'FINAL_QUALITY failed — ' + remaining.length + ' problemi critici dopo ' + QG_MAX_RETRIES + ' tentativi.');
+  renderBbl('ai', '⚠️ **Quality Gate non superato**: ' + remaining.length + ' problemi residui. Il progetto potrebbe richiedere miglioramenti manuali.');
+  updateJob(job, {
+    qualityIssues: remaining.map(i => i.type + ': ' + i.message),
+    qualityPassed: false
+  });
 }
 
 // Auto-fix loop: try to fix code that errored
