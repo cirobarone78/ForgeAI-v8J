@@ -2932,7 +2932,25 @@ async function runAgents(prompt,mode,qual) {
       addLog('logic','⚙️','Logic Agent','Parsing e applicazione file…');
       await sleep(200);
 
-      const parsed = parseAIResponse(raw, mode);
+      let parsed = parseAIResponse(raw, mode);
+
+      // Validate: block monofile fallback when plan requires multi-file
+      const planCheck = validateGenerationVsPlan(parsed, plan);
+      if (!planCheck.valid) {
+        addLog('logic','⚠️','Validazione','Output monofile bloccato — richiedo generazione multi-file…');
+        // Retry once with an explicit anti-monofile instruction
+        try {
+          const retryPrompt = prompt + '\n\nATTENZIONE: devi generare TUTTI i file del piano (' + (plan.fileTree||[]).join(', ') + '). NON generare un solo file. Usa il formato JSON multi-file.';
+          raw = await callAPIMultiFile(retryPrompt, mode, qual, hasCode, 'ui', plan, ctxPack);
+          parsed = parseAIResponse(raw, mode);
+          const recheck = validateGenerationVsPlan(parsed, plan);
+          if (!recheck.valid) {
+            addLog('logic','⚠️','Validazione', recheck.reason);
+          }
+        } catch(retryErr) {
+          addLog('logic','❌','Retry','Retry multi-file fallito: ' + retryErr.message);
+        }
+      }
 
       // Auto-review largest file
       if (parsed.type === 'json' && parsed.data.filesChanged) {
@@ -3085,7 +3103,7 @@ async function callAPIPlan(prompt, mode, hasCode) {
 
 Rispondi SOLO con questo JSON valido (nessun testo prima o dopo):
 {
-  "projectType": "static|vite-react|nextjs|node-express|html-game|other",
+  "projectType": "static-html|vite-react|nextjs|node-express|html-game",
   "stack": {"frontend":"descrizione breve", "backend":"descrizione breve o none", "db":"descrizione breve o none"},
   "fileTree": ["path/file1.ext", "path/file2.ext"],
   "milestones": [
@@ -3095,16 +3113,32 @@ Rispondi SOLO con questo JSON valido (nessun testo prima o dopo):
   "notes": ["nota1", "nota2"]
 }
 
-REGOLE:
-- projectType: scegli il tipo più adatto alla richiesta.
-- fileTree: elenca TUTTI i file necessari con path completi.
-- milestones: dividi in 1-4 step logici, ognuno con i file da generare.
-- Per giochi HTML semplici: projectType="html-game", fileTree=["index.html"] (tutto in un file va bene).
-- Per app con UI complessa: separa html, css, js in file distinti.
-- Per React: includi package.json, vite.config.js, index.html, src/main.jsx, src/App.jsx, componenti.
-- Per Express: includi package.json, server.js, routes, public/index.html.
+REGOLE projectType — scegli UNO di questi tipi:
+1. html-game → gioco HTML semplice (snake, tetris, pong). fileTree=["index.html"] (tutto in uno va bene).
+2. static-html → app HTML classica senza framework. MINIMO OBBLIGATORIO: index.html, style.css, app.js (3 file separati, MAI un monolite).
+3. vite-react → app React con Vite. MINIMO OBBLIGATORIO: package.json, vite.config.js, index.html, src/main.jsx, src/App.jsx.
+4. nextjs → app Next.js. MINIMO OBBLIGATORIO: package.json, app/layout.jsx, app/page.jsx, app/globals.css.
+5. node-express → server Node + Express. MINIMO OBBLIGATORIO: package.json, server.js, public/index.html.
+
+REGOLE fileTree:
+- fileTree DEVE contenere ALMENO i file minimi obbligatori per il tipo scelto.
+- Se la richiesta menziona dashboard, sidebar, login, auth, crud, admin, moduli, componenti, storage, database, API, router, chart, tabs, modal, calendario, profilo, ricerca, filtri, notifiche: ESPANDI il fileTree con file aggiuntivi coerenti (componenti, route, servizi, pagine).
+- Per React con UI complessa: aggiungi src/components/NomeComponente.jsx per ogni componente logico.
+- Per Express con API: aggiungi routes/nomeRoute.js per ogni gruppo di endpoint.
+- Per static-html con sezioni multiple: aggiungi file JS separati per logica complessa (es. storage.js, api.js, ui.js).
+- Ogni file nel fileTree DEVE essere coperto da almeno un milestone.
+
+REGOLE milestones:
+- Dividi in 1-5 step logici. Ogni step elenca i suoi file.
+- Step 1 è SEMPRE il setup base (package.json, config, entrypoints).
+- Step successivi aggiungono componenti, pagine, servizi.
+
+REGOLE generali:
+- NON generare codice — solo il piano strutturale.
+- NON usare projectType="other" — scegli il tipo più vicino tra i 5 disponibili.
+- Se l'utente chiede esplicitamente "un singolo file HTML" o "tutto in un file", usa html-game.
+- Altrimenti preferisci SEMPRE la struttura multi-file.
 - notes: suggerimenti tecnici, librerie consigliate, edge cases.
-- NON generare codice — solo il piano.
 
 ${existingFiles}`;
 
@@ -3122,13 +3156,16 @@ ${existingFiles}`;
 
   // Parse plan JSON
   let cleaned = raw.replace(/^```(?:json)?\s*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+  let plan = null;
   try {
-    return JSON.parse(cleaned);
+    plan = JSON.parse(cleaned);
   } catch(e) {
     const m = cleaned.match(/\{[\s\S]*"fileTree"[\s\S]*\}/);
-    if (m) try { return JSON.parse(m[0]); } catch(e2) {}
-    return null;
+    if (m) try { plan = JSON.parse(m[0]); } catch(e2) {}
   }
+  // Enforce minimum fileTree and fix milestones
+  if (plan) plan = enforcePlanMinimum(plan, prompt);
+  return plan;
 }
 
 function showPlanInUI(plan) {
@@ -3153,6 +3190,101 @@ function showPlanInUI(plan) {
 
   renderBbl('ai', msg);
   saveMsg('ai', '📋 Piano: ' + fileCount + ' file, ' + (plan.milestones||[]).length + ' step');
+}
+
+// ══════════════════════════════════
+// PLAN ENFORCEMENT (v8j-p3)
+// ══════════════════════════════════
+
+// Minimum required files per project type
+const PLAN_MINIMUMS = {
+  'static':       ['index.html', 'style.css', 'app.js'],
+  'static-html':  ['index.html', 'style.css', 'app.js'],
+  'html-game':    ['index.html'],  // single-file allowed
+  'vite-react':   ['package.json', 'vite.config.js', 'index.html', 'src/main.jsx', 'src/App.jsx'],
+  'nextjs':       ['package.json', 'app/layout.jsx', 'app/page.jsx', 'app/globals.css'],
+  'node-express': ['package.json', 'server.js', 'public/index.html']
+};
+
+// Keywords that signal complex structure → planner should expand fileTree
+const COMPLEX_KEYWORDS = /dashboard|sidebar|login|auth|register|crud|admin|kanban|drag.?drop|storage|database|api|router|navigation|tabs?|modal|chart|calendar|settings|profile|todo|chat|notifications?|search|filter/i;
+
+// Enforce minimum fileTree on a parsed plan. Mutates plan in place.
+function enforcePlanMinimum(plan, userPrompt) {
+  if (!plan || !plan.projectType) return plan;
+  const type = plan.projectType;
+
+  // Get the minimum for this type
+  const minimum = PLAN_MINIMUMS[type];
+  if (!minimum) return plan; // unknown type, trust LLM
+
+  // Ensure fileTree exists
+  if (!plan.fileTree) plan.fileTree = [];
+
+  // Add any missing minimum files
+  for (const f of minimum) {
+    if (!plan.fileTree.includes(f)) {
+      plan.fileTree.push(f);
+    }
+  }
+
+  // If prompt signals complexity, ensure planner expanded beyond minimum
+  if (COMPLEX_KEYWORDS.test(userPrompt) && type !== 'html-game') {
+    // For React: ensure at least one component beyond App
+    if (type === 'vite-react' && !plan.fileTree.some(f => /^src\/components\//.test(f))) {
+      // Don't invent names — just add a placeholder path the LLM already might have
+      // This is a soft hint; the real expansion comes from the stronger prompt
+    }
+    // For static: ensure separate CSS
+    if ((type === 'static' || type === 'static-html') && plan.fileTree.length <= 3) {
+      // Prompt already asks for expansion — we just ensure minimum is there
+    }
+  }
+
+  // Rebuild milestones if they don't cover all fileTree files
+  if (plan.milestones && plan.milestones.length) {
+    const coveredFiles = new Set(plan.milestones.flatMap(m => m.files || []));
+    const uncovered = plan.fileTree.filter(f => !coveredFiles.has(f));
+    if (uncovered.length > 0) {
+      // Add uncovered files to the first milestone (setup)
+      if (plan.milestones[0]) {
+        plan.milestones[0].files = [...new Set([...(plan.milestones[0].files || []), ...uncovered])];
+      }
+    }
+  } else {
+    // No milestones — create one covering all files
+    plan.milestones = [{ name: 'Setup completo', files: [...plan.fileTree] }];
+  }
+
+  return plan;
+}
+
+// Validate that generation output respects the plan (not monofile when plan is multi-file)
+function validateGenerationVsPlan(parsed, plan) {
+  if (!plan || !plan.fileTree || plan.fileTree.length <= 1) return { valid: true };
+  if (plan.projectType === 'html-game') return { valid: true };
+
+  // If plan expects multiple files but output is raw (single file) → invalid
+  if (parsed.type === 'raw') {
+    return {
+      valid: false,
+      reason: `Piano prevede ${plan.fileTree.length} file ma la generazione ha prodotto un singolo file. Output incompleto.`
+    };
+  }
+
+  // If plan expects multiple files but output has only 1 → invalid
+  if (parsed.type === 'json' && parsed.data.filesChanged && parsed.data.filesChanged.length === 1) {
+    const singleFile = parsed.data.filesChanged[0]?.path || '';
+    // Allow if it's a targeted edit (user editing specific file)
+    if (plan.fileTree.length > 3 && singleFile === 'index.html') {
+      return {
+        valid: false,
+        reason: `Piano prevede ${plan.fileTree.length} file ma generato solo ${singleFile}. Fallback monofile bloccato.`
+      };
+    }
+  }
+
+  return { valid: true };
 }
 
 // ══════════════════════════════════
@@ -3408,7 +3540,14 @@ async function runBatchedGeneration(job, plan, prompt, mode, qual) {
   }
 
   updateJob(job, { changedFiles: allChangedFiles });
-  return { completed: true, totalFiles: totalFilesGenerated, totalLines: totalLinesGenerated };
+
+  // Check for missing files from plan
+  const stillPending = getPendingFiles(plan);
+  const isComplete = stillPending.length === 0;
+  if (stillPending.length > 0) {
+    addLog('test', '⚠️', 'Piano', stillPending.length + ' file dal piano non generati: ' + stillPending.join(', '));
+  }
+  return { completed: isComplete, totalFiles: totalFilesGenerated, totalLines: totalLinesGenerated };
 }
 
 // ══════════════════════════════════
