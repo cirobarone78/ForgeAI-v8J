@@ -2240,11 +2240,11 @@ async function pushToGitHub() {
     ghStep('gs-3', 'done');
 
     // Step 4: Enable GitHub Pages (only for static projects with HTML)
+    const hasHtml = Object.keys(files).some(f => f.endsWith('.html'));
+    const projNeedsBuild = needsBuild();
     const gs4 = document.getElementById('gs-4');
     if (gs4) gs4.innerHTML = `<div class="step-dot"></div>${projNeedsBuild ? 'Verifica deploy' : 'Attivazione GitHub Pages'}`;
     ghStep('gs-4', 'active');
-    const hasHtml = Object.keys(files).some(f => f.endsWith('.html'));
-    const projNeedsBuild = needsBuild();
     let pagesUrl = null;
     if (!isPrivate && hasHtml && !projNeedsBuild) {
       await sleep(500);
