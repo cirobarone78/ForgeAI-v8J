@@ -1365,7 +1365,8 @@ body::after {
 .job-status { padding:2px 7px; border-radius:9999px; font-family:'Outfit',sans-serif; font-size:9px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; flex-shrink:0; }
 .job-status.plan,.job-status.apply { background:rgba(245,158,11,0.12); color:#F59E0B; }
 .job-status.run,.job-status.verify { background:rgba(58,134,255,0.12); color:#3A86FF; }
-.job-status.fix { background:rgba(255,159,28,0.12); color:#FF9F1C; }
+.job-status.fix,.job-status.quality_fix { background:rgba(255,159,28,0.12); color:#FF9F1C; }
+.job-status.quality_review { background:rgba(139,92,246,0.12); color:#A78BFA; }
 .job-status.done { background:rgba(16,185,129,0.12); color:#10B981; }
 .job-status.failed,.job-status.cancelled { background:rgba(239,68,68,0.12); color:#EF4444; }
 .job-title { font-size:12px; color:#A1A1AA; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -2888,6 +2889,16 @@ async function runAgents(prompt,mode,qual) {
         saveMsg('ai', '❌ Fallito dopo ' + batchResult.totalFiles + ' file.');
         toast('❌ Generazione fallita', 'err');
       } else {
+        // ── PROJECT QUALITY GATE (before marking DONE) ──
+        try {
+          await runProjectQualityGate(job, plan, prompt, mode, qual);
+        } catch(qgErr) {
+          console.warn('Quality gate error:', qgErr.message);
+          addLog('test', '⚠️', 'Quality Gate', 'Errore quality gate: ' + qgErr.message);
+        }
+
+        if (S.currentJob?.id !== job.id) return; // cancelled during QG
+
         // Final sandbox verification if Node project
         if (isNodeProject() && job.status !== 'DONE') {
           addLog('test','🚀','Final Verify','Verifica finale sandbox…');
@@ -2905,11 +2916,12 @@ async function runAgents(prompt,mode,qual) {
         // SNAPSHOT after all batches
         saveSnapshot('Post-job: ' + prompt.slice(0, 40), job.id);
 
+        const qIssues = job.qualityIssues ? ' ⚠️ ' + job.qualityIssues.length + ' quality issues' : '';
         const msg = '✅ **Progetto completato!** ' + batchResult.totalFiles + ' file generati (' +
           batchResult.totalLines + ' righe totali)' +
-          (batchResult.completed ? '' : ' — generazione parziale');
+          (batchResult.completed ? '' : ' — generazione parziale') + qIssues;
         renderBbl('ai', msg);
-        saveMsg('ai', '✅ ' + batchResult.totalFiles + ' file, ' + batchResult.totalLines + ' righe.');
+        saveMsg('ai', '✅ ' + batchResult.totalFiles + ' file, ' + batchResult.totalLines + ' righe.' + qIssues);
         toast('✅ Generazione completata', 'ok');
       }
 
@@ -2983,6 +2995,16 @@ async function runAgents(prompt,mode,qual) {
       updateJob(job, { changedFiles: result.changedFiles, attempt: 1 });
       updateProjectSummary(job, plan);
 
+      // ── PROJECT QUALITY GATE (single-shot path) ──
+      try {
+        await runProjectQualityGate(job, plan, prompt, mode, qual);
+      } catch(qgErr) {
+        console.warn('Quality gate error:', qgErr.message);
+        addLog('test', '⚠️', 'Quality Gate', 'Errore quality gate: ' + qgErr.message);
+      }
+
+      if (S.currentJob?.id !== job.id) return; // cancelled during QG
+
       if (isNodeProject()) {
         updateJob(job, { status: 'RUN' });
         addLog('test','🚀','Runner','Progetto Node rilevato — avvia sandbox per verificare.');
@@ -2998,12 +3020,13 @@ async function runAgents(prompt,mode,qual) {
 
       saveSnapshot('Post-job: ' + prompt.slice(0, 40), job.id);
 
+      const qIssues = job.qualityIssues ? ' ⚠️ ' + job.qualityIssues.length + ' quality issues' : '';
       const fileNames = result.changedFiles.join(', ');
       const msg = parsed.type === 'json'
-        ? `✅ **${result.changedFiles.length} file** generati (${result.totalLines} righe totali): ${fileNames}${result.summary ? '\n\n' + result.summary : ''}`
-        : `✅ Completato — **${result.totalLines} righe** di codice ${mode.toUpperCase()}.`;
+        ? `✅ **${result.changedFiles.length} file** generati (${result.totalLines} righe totali): ${fileNames}${result.summary ? '\n\n' + result.summary : ''}${qIssues}`
+        : `✅ Completato — **${result.totalLines} righe** di codice ${mode.toUpperCase()}.${qIssues}`;
       renderBbl('ai', msg);
-      saveMsg('ai', `✅ ${result.changedFiles.length} file, ${result.totalLines} righe.`);
+      saveMsg('ai', `✅ ${result.changedFiles.length} file, ${result.totalLines} righe.${qIssues}`);
       toast('✅ Generazione completata','ok');
 
       if (result.nextBatch && result.nextBatch.needed) {
@@ -4525,7 +4548,7 @@ function renderJobs() {
   }
   cnt.textContent = S.cur.jobs.length + ' jobs';
   list.innerHTML = S.cur.jobs.map(j => {
-    const isRunning = ['PLAN','APPLY','RUN','VERIFY','FIX'].includes(j.status);
+    const isRunning = ['PLAN','APPLY','RUN','VERIFY','FIX','QUALITY_REVIEW','QUALITY_FIX'].includes(j.status);
     const cls = isRunning ? 'running' : j.status.toLowerCase();
     return `<div class="job-item ${cls}">
       <span class="job-status ${j.status.toLowerCase()}">${j.status}</span>
@@ -4640,6 +4663,286 @@ REGOLA ASSOLUTA: SOLO codice puro. Zero spiegazioni, zero markdown, zero backtic
   const data = await r.json();
   const reviewed = data.content.map(b => b.text || '').join('').trim().replace(/^```[\w]*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
   return (reviewed.length > code.length * 0.5 && (reviewed.includes('<') || reviewed.includes('def ') || reviewed.includes('function '))) ? reviewed : code;
+}
+
+// ══════════════════════════════════
+// PROJECT QUALITY GATE (v8j-qg)
+// ══════════════════════════════════
+
+// Determine if the user request is "complex" (deserves strict quality gate)
+function isComplexRequest(prompt) {
+  const markers = [
+    'dashboard', 'sidebar', 'login', 'auth', 'register', 'signup',
+    'crud', 'database', 'storage', 'persist', 'localstorage', 'indexeddb',
+    'react', 'vite', 'next', 'vue', 'angular', 'svelte',
+    'responsive', 'modern', 'professional', 'production',
+    'multi-file', 'multi file', 'component', 'routing', 'router',
+    'card', 'cards', 'modal', 'tab', 'tabs', 'form', 'table',
+    'chart', 'graph', 'api', 'fetch', 'drag', 'drop',
+    'animation', 'transition', 'theme', 'dark mode',
+    'e-commerce', 'ecommerce', 'shop', 'cart', 'checkout',
+    'kanban', 'calendar', 'editor', 'cms', 'blog',
+    'notification', 'real-time', 'socket', 'chat'
+  ];
+  const low = (prompt || '').toLowerCase();
+  return markers.filter(m => low.includes(m)).length >= 2;
+}
+
+// Local static analysis of project quality
+function reviewProjectQuality(job, plan, prompt) {
+  const files = S.cur?.files || {};
+  const fileKeys = Object.keys(files);
+  const issues = [];
+  const isComplex = isComplexRequest(prompt);
+
+  // 1. Planned files vs actually created
+  if (plan && plan.fileTree && plan.fileTree.length > 0) {
+    const missing = plan.fileTree.filter(f => !files[f] || files[f].trim().length < 30);
+    if (missing.length > 0) {
+      issues.push({ severity: 'high', type: 'missing-files', message: 'File dal piano non generati o vuoti: ' + missing.join(', '), files: missing });
+    }
+  }
+
+  // 2. Placeholder / stub / TODO detection
+  const stubPatterns = [/TODO[:\s]/gi, /FIXME/gi, /placeholder/gi, /lorem ipsum/gi, /stub/gi, /not implemented/gi, /coming soon/gi];
+  const stubFiles = [];
+  for (const [path, content] of Object.entries(files)) {
+    let stubCount = 0;
+    for (const pat of stubPatterns) {
+      pat.lastIndex = 0;
+      const matches = content.match(pat);
+      if (matches) stubCount += matches.length;
+    }
+    if (stubCount >= 3) stubFiles.push({ path, count: stubCount });
+  }
+  if (stubFiles.length > 0) {
+    issues.push({ severity: 'high', type: 'placeholders', message: 'File con troppi placeholder/TODO/stub: ' + stubFiles.map(f => f.path + '(' + f.count + ')').join(', '), files: stubFiles.map(f => f.path) });
+  }
+
+  // 3. CSS quality check
+  const allContent = Object.values(files).join('\n');
+  const cssInFiles = allContent.match(/<style[\s\S]*?<\/style>/gi) || [];
+  const cssFiles = fileKeys.filter(f => f.endsWith('.css'));
+  const totalCssLines = cssInFiles.reduce((sum, block) => sum + block.split('\n').length, 0) +
+    cssFiles.reduce((sum, f) => sum + (files[f] || '').split('\n').length, 0);
+  const totalHtmlLines = fileKeys.filter(f => f.endsWith('.html') || f.endsWith('.jsx') || f.endsWith('.tsx') || f.endsWith('.vue'))
+    .reduce((sum, f) => sum + (files[f] || '').split('\n').length, 0);
+
+  if (isComplex && totalCssLines < 20 && totalHtmlLines > 50) {
+    issues.push({ severity: 'high', type: 'minimal-css', message: 'CSS troppo minimale (' + totalCssLines + ' righe) per un progetto complesso (' + totalHtmlLines + ' righe di markup). Serve styling strutturato.' });
+  } else if (isComplex && totalCssLines < 40 && totalHtmlLines > 100) {
+    issues.push({ severity: 'medium', type: 'low-css', message: 'Rapporto CSS/markup molto basso (' + totalCssLines + '/' + totalHtmlLines + '). UI probabilmente poco stilizzata.' });
+  }
+
+  // 4. Feature keywords check — verify requested features actually appear in code
+  if (isComplex) {
+    const featureChecks = [
+      { keywords: ['sidebar', 'side-bar'], patterns: [/sidebar/i, /side-bar/i, /aside/i, /nav.*vertical/i, /drawer/i] },
+      { keywords: ['login', 'signin', 'sign-in'], patterns: [/login/i, /sign.?in/i, /password/i, /authenticate/i] },
+      { keywords: ['dashboard'], patterns: [/dashboard/i, /widget/i, /stat.*card/i, /overview/i] },
+      { keywords: ['card', 'cards'], patterns: [/\.card/i, /card-/i, /card_/i, /Card/] },
+      { keywords: ['modal', 'dialog', 'popup'], patterns: [/modal/i, /dialog/i, /overlay/i, /popup/i] },
+      { keywords: ['chart', 'graph', 'grafico'], patterns: [/chart/i, /graph/i, /canvas/i, /svg.*path/i, /recharts/i, /chart\.js/i] },
+      { keywords: ['localstorage', 'storage', 'persist', 'salva'], patterns: [/localStorage/i, /sessionStorage/i, /indexedDB/i, /\.setItem/i, /persist/i] },
+      { keywords: ['responsive'], patterns: [/@media/i, /flex/i, /grid/i, /responsive/i, /min-width/i, /max-width/i] },
+      { keywords: ['router', 'routing', 'pagine', 'navigazione'], patterns: [/react-router/i, /createBrowserRouter/i, /Route/i, /useNavigate/i, /router/i, /hashchange/i] },
+      { keywords: ['form', 'modulo', 'input'], patterns: [/<form/i, /<input/i, /onSubmit/i, /handleSubmit/i, /onChange/i] },
+      { keywords: ['table', 'tabella'], patterns: [/<table/i, /<th/i, /\.table/i, /grid.*row/i] },
+      { keywords: ['drag', 'drop', 'trascinamento'], patterns: [/drag/i, /drop/i, /onDrag/i, /draggable/i, /sortable/i] },
+      { keywords: ['dark mode', 'tema scuro', 'theme'], patterns: [/dark/i, /theme/i, /color-scheme/i, /prefers-color-scheme/i] }
+    ];
+    const promptLow = (prompt || '').toLowerCase();
+    const missingFeatures = [];
+    for (const fc of featureChecks) {
+      const requested = fc.keywords.some(kw => promptLow.includes(kw));
+      if (requested) {
+        const found = fc.patterns.some(pat => pat.test(allContent));
+        if (!found) missingFeatures.push(fc.keywords[0]);
+      }
+    }
+    if (missingFeatures.length > 0) {
+      issues.push({ severity: 'high', type: 'missing-features', message: 'Feature richieste ma non trovate nel codice: ' + missingFeatures.join(', '), features: missingFeatures });
+    }
+  }
+
+  // 5. Unconnected JS events (onclick/addEventListener referencing missing functions)
+  for (const [path, content] of Object.entries(files)) {
+    if (!path.endsWith('.html') && !path.endsWith('.jsx') && !path.endsWith('.tsx')) continue;
+    const onclickRefs = [...(content.matchAll(/onclick="(\w+)\(/g) || [])].map(m => m[1]);
+    for (const fn of onclickRefs) {
+      const fnDef = new RegExp('function\\s+' + fn + '\\s*\\(|const\\s+' + fn + '\\s*=|let\\s+' + fn + '\\s*=|var\\s+' + fn + '\\s*=');
+      if (!fnDef.test(allContent)) {
+        issues.push({ severity: 'medium', type: 'missing-handler', message: 'Handler "' + fn + '()" usato in ' + path + ' ma non definito nel progetto.' });
+      }
+    }
+  }
+
+  // 6. Import/export coherence for multi-file projects
+  if (fileKeys.length > 3) {
+    for (const [path, content] of Object.entries(files)) {
+      const imports = [...(content.matchAll(/(?:import .+ from ['"])\.\/([^'"]+)['"]/g) || [])].map(m => m[1]);
+      for (const imp of imports) {
+        const candidates = [imp, imp + '.js', imp + '.jsx', imp + '.tsx', imp + '.ts', imp + '/index.js', imp + '/index.jsx', imp + '/index.tsx'];
+        // Resolve relative to the importing file's directory
+        const dir = path.includes('/') ? path.substring(0, path.lastIndexOf('/') + 1) : '';
+        const found = candidates.some(c => files[dir + c]);
+        if (!found) {
+          issues.push({ severity: 'medium', type: 'broken-import', message: 'Import "./' + imp + '" in ' + path + ' non ha un file corrispondente.' });
+        }
+      }
+    }
+  }
+
+  // 7. UI too basic for complex request (very short main HTML/JSX)
+  if (isComplex) {
+    const mainFiles = fileKeys.filter(f => f === 'index.html' || f.includes('App.jsx') || f.includes('App.tsx') || f.includes('page.jsx'));
+    for (const mf of mainFiles) {
+      const lines = (files[mf] || '').split('\n').length;
+      if (lines < 30) {
+        issues.push({ severity: 'medium', type: 'skeleton-ui', message: 'File principale "' + mf + '" ha solo ' + lines + ' righe — probabilmente scheletro non funzionale.' });
+      }
+    }
+  }
+
+  // Deduplicate
+  const seen = new Set();
+  const unique = issues.filter(i => {
+    const key = i.type + ':' + i.message;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return {
+    isComplex,
+    issues: unique,
+    highCount: unique.filter(i => i.severity === 'high').length,
+    mediumCount: unique.filter(i => i.severity === 'medium').length,
+    passed: unique.filter(i => i.severity === 'high').length === 0
+  };
+}
+
+// AI-powered quality fix pass
+async function runQualityFixPass(job, plan, prompt, mode, qual, qReport) {
+  if (!S.currentJob || S.currentJob.id !== job.id) return false;
+
+  addLog('logic', '🔧', 'Quality Fix', 'Avvio fix pass per ' + qReport.issues.length + ' problemi…');
+  updateJob(job, { status: 'QUALITY_FIX' });
+
+  const files = S.cur?.files || {};
+  const fileKeys = Object.keys(files);
+
+  // Gather the most relevant file contents for context (budget ~20k chars)
+  let fileContext = '';
+  const BUDGET = 20000;
+  const priorityFiles = ['index.html', 'src/App.jsx', 'src/App.tsx', 'style.css', 'src/index.css', 'app/page.jsx', 'app/page.tsx'];
+  const orderedKeys = [...new Set([...priorityFiles.filter(f => files[f]), ...fileKeys])];
+  for (const f of orderedKeys) {
+    const add = '── ' + f + ' ──\n' + (files[f] || '').slice(0, 4000) + '\n\n';
+    if (fileContext.length + add.length > BUDGET) break;
+    fileContext += add;
+  }
+
+  const issueList = qReport.issues.map((iss, i) => (i + 1) + '. [' + iss.severity.toUpperCase() + '] ' + iss.message).join('\n');
+
+  const fixSys = `Sei un SENIOR FULL-STACK DEVELOPER. Il progetto generato ha problemi di qualità che devi correggere.
+Il tuo obiettivo è rendere il progetto REALMENTE FUNZIONANTE e con UI PROFESSIONALE.
+
+REGOLE CRITICHE:
+- NON rigenerare tutto: correggi/migliora SOLO i file che hanno problemi
+- Se manca CSS: aggiungi styling moderno, completo, con colori, spacing, border-radius, shadows, responsive
+- Se mancano feature: implementale davvero, non con placeholder
+- Se ci sono stub/TODO: sostituiscili con codice reale funzionante
+- Se mancano handler JS: implementali
+- Se mancano import: aggiungili
+- Ogni file restituito deve essere COMPLETO (non parziale)
+
+FORMATO OUTPUT — rispondi SOLO con JSON valido:
+{"summary":"cosa hai corretto","filesChanged":[{"path":"file.ext","action":"update","content":"contenuto completo file corretto"}]}`;
+
+  const fixMsg = `RICHIESTA UTENTE ORIGINALE: "${prompt}"
+
+PROBLEMI RILEVATI DAL QUALITY GATE:
+${issueList}
+
+FILE ATTUALI DEL PROGETTO:
+${fileContext}
+
+Correggi i problemi elencati. Concentrati sui problemi HIGH prima. Restituisci SOLO i file modificati/aggiunti.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({
+        model: MODELS.sonnet, max_tokens: 16000, system: fixSys,
+        messages: [{ role: 'user', content: fixMsg }]
+      })
+    });
+    if (!r.ok) throw new Error('Quality fix API error: ' + r.status);
+    const data = await r.json();
+    const raw = data.content.map(b => b.text || '').join('').trim();
+
+    const parsed = parseAIResponse(raw, mode);
+    if (parsed.type === 'json' && parsed.data.filesChanged && parsed.data.filesChanged.length > 0) {
+      saveSnapshot('Pre-quality-fix', job.id);
+      const result = applyJsonPatch(parsed, prompt);
+      saveSnapshot('Post-quality-fix', job.id);
+      addLog('test', '✅', 'Quality Fix', result.changedFiles.length + ' file migliorati (' + result.totalLines + ' righe): ' + result.changedFiles.join(', '));
+      return true;
+    } else {
+      addLog('test', '⚠️', 'Quality Fix', 'Fix pass non ha prodotto modifiche valide.');
+      return false;
+    }
+  } catch (e) {
+    addLog('test', '❌', 'Quality Fix', 'Errore durante fix pass: ' + e.message);
+    return false;
+  }
+}
+
+// Main quality gate orchestrator — call after generation, before DONE
+async function runProjectQualityGate(job, plan, prompt, mode, qual) {
+  if (!S.currentJob || S.currentJob.id !== job.id) return;
+
+  addLog('test', '🔍', 'Quality Gate', 'Avvio revisione qualità progetto…');
+  updateJob(job, { status: 'QUALITY_REVIEW' });
+
+  const qReport = reviewProjectQuality(job, plan, prompt);
+
+  if (qReport.issues.length === 0) {
+    addLog('test', '✅', 'Quality Gate', 'Nessun problema rilevato — quality gate superato!');
+    return;
+  }
+
+  // Log all issues
+  for (const iss of qReport.issues) {
+    const icon = iss.severity === 'high' ? '🔴' : '🟡';
+    addLog('test', icon, 'Quality Gate', '[' + iss.severity.toUpperCase() + '] ' + iss.message);
+  }
+
+  if (qReport.passed) {
+    // Only medium issues — log but pass
+    addLog('test', '🟡', 'Quality Gate', qReport.mediumCount + ' issue minori rilevate — quality gate superato con avvertimenti.');
+    return;
+  }
+
+  // High severity issues found — run fix pass
+  addLog('test', '🔴', 'Quality Gate', qReport.highCount + ' problemi critici — avvio fix pass finale…');
+  renderBbl('ai', '🔍 **Quality Gate**: ' + qReport.highCount + ' problemi critici trovati. Avvio correzione automatica…');
+
+  const fixed = await runQualityFixPass(job, plan, prompt, mode, qual, qReport);
+
+  // Re-check after fix
+  const recheck = reviewProjectQuality(job, plan, prompt);
+  if (recheck.passed) {
+    addLog('test', '✅', 'Quality Gate', 'Dopo fix: quality gate superato!');
+    renderBbl('ai', '✅ **Quality Gate superato** dopo correzione automatica.');
+  } else {
+    const remaining = recheck.issues.filter(i => i.severity === 'high');
+    addLog('test', '⚠️', 'Quality Gate', 'Dopo fix: ' + remaining.length + ' problemi critici restanti. Progetto segnalato come incompleto.');
+    renderBbl('ai', '⚠️ **Quality Gate**: ' + remaining.length + ' problemi residui. Il progetto potrebbe richiedere ulteriori miglioramenti.');
+    updateJob(job, { qualityIssues: remaining.map(i => i.message) });
+  }
 }
 
 // Auto-fix loop: try to fix code that errored
