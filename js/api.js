@@ -84,6 +84,181 @@ function getProjectKind() {
 }
 
 // ══════════════════════════════════
+// CLARIFY — Domande chiarificatrici (v8k)
+// ══════════════════════════════════
+
+// Detect if a prompt mentions UI/style/design preferences
+const STYLE_KEYWORDS = /stile|design|grafica|layout|colori?|tema|font|aspetto|interfaccia|ui|ux|moderno|minimal|dark|light|material|glass|neon|retro|vintage|corporate|elegante|professionale|colorato|giocoso/i;
+
+async function callAPIClarify(prompt, mode) {
+  const hasStyleHints = STYLE_KEYWORDS.test(prompt);
+
+  const clarifySys = `Sei un assistente esperto di sviluppo software. Il tuo compito è analizzare la richiesta dell'utente e generare domande chiarificatrici SOLO se servono.
+
+Rispondi SOLO con questo JSON valido (nessun testo prima o dopo):
+{
+  "needsClarification": true|false,
+  "questions": [
+    {"id": "q1", "text": "Testo della domanda", "options": ["Opzione A", "Opzione B", "Opzione C"], "category": "functionality|style|data|ux"},
+    ...
+  ]
+}
+
+REGOLE:
+- Se la richiesta è chiara e completa, rispondi con {"needsClarification": false, "questions": []}.
+- Genera MASSIMO 4 domande, MINIMO 1 se needsClarification è true.
+- Ogni domanda DEVE avere 2-4 opzioni predefinite tra cui scegliere (l'utente può anche rispondere a testo libero).
+- Le domande devono essere UTILI e CONCRETE, non generiche.
+- NON chiedere cose ovvie o che si possono dedurre dal contesto.
+
+QUANDO CHIEDERE (needsClarification: true):
+1. **Stile/Design**: Se il prompt NON specifica preferenze di stile visivo (colori, tema, layout), chiedi SEMPRE almeno una domanda sullo stile. Esempi:
+   - "Che stile visivo preferisci?" con opzioni tipo ["Dark mode minimalista", "Chiaro e professionale", "Colorato e moderno", "Altro"]
+   - "Che palette colori preferisci?" con opzioni concrete
+   - "Che tipo di layout?" con opzioni specifiche al tipo di app
+${hasStyleHints ? '   NOTA: L\'utente ha già indicato preferenze di stile — NON chiedere di stile a meno che manchino dettagli importanti.' : '   NOTA: L\'utente NON ha specificato lo stile — CHIEDI SEMPRE almeno una domanda su design/colori/layout.'}
+2. **Funzionalità ambigue**: Se ci sono requisiti che possono essere interpretati in modi diversi.
+3. **Dati/Contenuti**: Se servono dati specifici che l'utente non ha fornito (es. categorie, ruoli utente, campi specifici).
+4. **UX**: Se il flusso utente non è chiaro (es. serve login? come si naviga?).
+
+QUANDO NON CHIEDERE (needsClarification: false):
+- Richieste semplici e dirette (es. "crea un timer", "fai un calcolatore").
+- Quando il prompt è già molto dettagliato con specifiche tecniche.
+- Per modifiche a codice esistente (es. "cambia il colore del bottone").
+- Se l'utente ha esplicitamente descritto stile, funzionalità e struttura.`;
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+    body: JSON.stringify({
+      model: getModelForAgent('plan'), max_tokens: 1200, temperature: 0.4, system: clarifySys,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+  if (!r.ok) throw new Error('Clarify API error');
+  const data = await r.json();
+  const raw = data.content.map(b => b.text || '').join('').trim();
+
+  let cleaned = raw.replace(/^```(?:json)?\s*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch(e) {
+    const m = cleaned.match(/\{[\s\S]*"questions"[\s\S]*\}/);
+    if (m) try { return JSON.parse(m[0]); } catch(e2) {}
+  }
+  return { needsClarification: false, questions: [] };
+}
+
+// Show clarification questions in chat and wait for answers
+function showClarifyUI(clarifyData) {
+  if (!clarifyData || !clarifyData.needsClarification || !clarifyData.questions?.length) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    const mc = document.getElementById('msgs');
+    const card = document.createElement('div');
+    card.className = 'clarify-card';
+
+    const questionsHTML = clarifyData.questions.map((q, i) => {
+      const optionsHTML = (q.options || []).map(opt =>
+        '<button class="clarify-opt" data-qid="' + q.id + '" data-val="' + escHtml(opt) + '">' + escHtml(opt) + '</button>'
+      ).join('');
+
+      return '<div class="clarify-q" data-qid="' + q.id + '">' +
+        '<div class="clarify-q-text"><span class="clarify-q-num">' + (i+1) + '</span>' + escHtml(q.text) + '</div>' +
+        '<div class="clarify-opts">' + optionsHTML + '</div>' +
+        '<input type="text" class="clarify-custom" data-qid="' + q.id + '" placeholder="O scrivi una risposta personalizzata…">' +
+        '</div>';
+    }).join('');
+
+    card.innerHTML =
+      '<div class="clarify-header">' +
+        '<div class="clarify-icon">💬</div>' +
+        '<div class="clarify-title-wrap">' +
+          '<div class="clarify-title">Prima di iniziare…</div>' +
+          '<div class="clarify-subtitle">Rispondi per personalizzare il risultato</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="clarify-body">' + questionsHTML + '</div>' +
+      '<div class="clarify-actions">' +
+        '<button class="clarify-btn confirm" id="clarify-confirm-btn">✓ Conferma e genera</button>' +
+        '<button class="clarify-btn skip" id="clarify-skip-btn">⏭ Salta — genera subito</button>' +
+      '</div>';
+
+    mc.appendChild(card);
+    card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'end' }), 500);
+
+    // Handle option clicks — toggle selected
+    card.querySelectorAll('.clarify-opt').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const qid = btn.dataset.qid;
+        // Deselect siblings
+        card.querySelectorAll('.clarify-opt[data-qid="' + qid + '"]').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        // Clear custom input for this question
+        const customInp = card.querySelector('.clarify-custom[data-qid="' + qid + '"]');
+        if (customInp) customInp.value = '';
+      });
+    });
+
+    // Custom input clears option selection
+    card.querySelectorAll('.clarify-custom').forEach(inp => {
+      inp.addEventListener('input', () => {
+        if (inp.value.trim()) {
+          const qid = inp.dataset.qid;
+          card.querySelectorAll('.clarify-opt[data-qid="' + qid + '"]').forEach(b => b.classList.remove('selected'));
+        }
+      });
+    });
+
+    // Collect answers and resolve
+    const collectAnswers = () => {
+      const answers = {};
+      clarifyData.questions.forEach(q => {
+        const selected = card.querySelector('.clarify-opt[data-qid="' + q.id + '"].selected');
+        const custom = card.querySelector('.clarify-custom[data-qid="' + q.id + '"]');
+        if (custom && custom.value.trim()) {
+          answers[q.id] = { question: q.text, answer: custom.value.trim() };
+        } else if (selected) {
+          answers[q.id] = { question: q.text, answer: selected.dataset.val };
+        }
+      });
+      return answers;
+    };
+
+    // Confirm: collect answers and build enriched prompt
+    document.getElementById('clarify-confirm-btn').onclick = () => {
+      const answers = collectAnswers();
+      card.querySelectorAll('.clarify-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
+      card.querySelectorAll('.clarify-custom').forEach(inp => { inp.disabled = true; });
+
+      // Build context string from answers
+      let context = '';
+      const answered = Object.values(answers);
+      if (answered.length > 0) {
+        context = '\n\n[PREFERENZE UTENTE]\n' + answered.map(a => '- ' + a.question + ' → ' + a.answer).join('\n');
+        const summaryParts = answered.map(a => a.answer);
+        addLog('plan', '💬', 'Chiarimenti', summaryParts.join(' · '));
+        saveMsg('ai', '💬 Risposte: ' + summaryParts.join(', '));
+      }
+      resolve(context);
+    };
+
+    // Skip: resolve with empty string
+    document.getElementById('clarify-skip-btn').onclick = () => {
+      card.querySelectorAll('.clarify-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
+      addLog('plan', '⏭', 'Chiarimenti saltati', 'Generazione con parametri default');
+      resolve('');
+    };
+
+    saveMsg('ai', '💬 ' + clarifyData.questions.length + ' domande chiarificatrici');
+    toast('💬 Rispondi alle domande per personalizzare il risultato', 'ok');
+  });
+}
+
+// ══════════════════════════════════
 // PLAN PROJECT (v8h)
 // ══════════════════════════════════
 async function callAPIPlan(prompt, mode, hasCode) {
@@ -224,9 +399,12 @@ function showPlanInUI(plan) {
       '</div>';
 
     mc.appendChild(card);
-    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    // iOS Safari fallback: re-scroll after layout settles
+    setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'end' }), 500);
 
     saveMsg('ai', '📋 Piano: ' + fileCount + ' file, ' + (plan.milestones||[]).length + ' step');
+    toast('📋 Piano pronto — clicca ▶ per generare', 'ok');
 
     // ── Confirm: read back edited file list and resolve ──
     document.getElementById('plan-confirm-btn').onclick = () => {
