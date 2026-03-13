@@ -1419,9 +1419,10 @@ body::after {
   .tb,.gh-btn { padding:5px 10px; font-size:11px; }
   .api-btn { padding:5px 10px; font-size:10px; }
   .model-btn,.agent-sel-btn { padding:5px 10px; font-size:11px; }
-  .workspace { flex-direction:column; position:relative; }
-  .sidebar { width:100%!important; min-width:unset; max-height:none; height:auto; flex:1; border-right:none; border-bottom:none; overflow:hidden; display:flex; flex-direction:column; min-height:0; padding-bottom:calc(52px + env(safe-area-inset-bottom,0px)); }
-  .sidebar .msgs { flex:1; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; min-height:0; }
+  .workspace { flex-direction:column; position:relative; min-height:0; }
+  .sidebar { width:100%!important; min-width:unset; flex:1; border-right:none; border-bottom:none; overflow:hidden; display:flex; flex-direction:column; min-height:0; padding-bottom:calc(52px + env(safe-area-inset-bottom,0px)); }
+  .sidebar .msgs { flex:1; overflow-y:scroll; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; min-height:0; }
+  .sidebar .empty-st { flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; }
   .resizer { display:none; }
   .right { display:none; position:fixed; inset:0; top:48px; bottom:calc(52px + env(safe-area-inset-bottom,0px)); z-index:80; background:#0A0A0A; }
   .right.mobile-show { display:flex; flex-direction:column; }
