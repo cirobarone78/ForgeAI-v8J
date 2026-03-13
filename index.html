@@ -851,6 +851,8 @@ async function runAgents(prompt,mode,qual) {
       renderBbl('ai', `✅ **Fullstack generato!**\n\n🌐 Frontend: **${feLines} righe** (index.html)\n⚙️ Backend: **${beLines} righe** (server.py)\n📦 requirements.txt incluso\n\nClicca **🚀 Deploy Guide** per pubblicarlo online.`);
       saveMsg('ai','✅ Fullstack generato.');
       toast('✅ Fullstack generato!','ok');
+      // Update project memory after fullstack generation
+      updateProjectSummary({ userGoal: prompt, changedFiles: ['index.html', 'server.py', 'requirements.txt'] }, S.cur.plan);
       // Show deploy guide button in chat
       addDeployBtn();
     } catch(e) {

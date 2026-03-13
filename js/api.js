@@ -1010,7 +1010,126 @@ function updateProjectSummary(job, plan) {
   const summary = buildProjectSummary(job, plan);
   S.cur.projectSummary = summary;
   save();
+  // Also trigger async project memory update (non-blocking)
+  updateProjectMemory(job).catch(e => console.warn('Memory update skipped:', e.message));
   return summary;
+}
+
+// ══════════════════════════════════
+// PROJECT MEMORY (persistent LLM-generated memory)
+// ══════════════════════════════════
+// Like CLAUDE.md — a living document that always describes the project,
+// updated by Haiku after every generation. Injected into ALL system prompts.
+
+async function updateProjectMemory(job) {
+  if (!S.cur || !S.key) return;
+  const files = S.cur.files || {};
+  const fileKeys = Object.keys(files);
+  if (fileKeys.length === 0) return;
+
+  const existingMemory = S.cur.projectMemory || '';
+  const plan = S.cur.plan;
+
+  // Build file info (names + sizes + first meaningful line)
+  const fileInfo = fileKeys.map(k => {
+    const content = files[k] || '';
+    const lines = content.split('\n');
+    const firstMeaningful = lines.find(l => l.trim() && !l.trim().startsWith('//') && !l.trim().startsWith('<!--') && !l.trim().startsWith('/*')) || lines[0] || '';
+    return `${k} (${lines.length} righe) — ${firstMeaningful.trim().slice(0, 60)}`;
+  }).join('\n');
+
+  // Recent user requests (from history, only user messages)
+  const userMsgs = S.history
+    .filter(m => m.role === 'user')
+    .slice(-4)
+    .map(m => {
+      const text = typeof m.content === 'string' ? m.content : (m.content?.[0]?.text || JSON.stringify(m.content));
+      return text.slice(0, 200);
+    });
+
+  // Job info
+  const jobInfo = job ? `Ultima azione: ${job.status || 'completata'}, file modificati: ${(job.changedFiles||[]).join(', ')}` : '';
+  const errors = (job?.errorsDetected || []).slice(-2).map(e => `[${e.type}] ${e.message}`).join('; ');
+
+  const sys = `Sei un assistente che mantiene una "memoria di progetto" per un IDE AI.
+Genera o AGGIORNA la memoria del progetto in formato strutturato.
+Questa memoria viene iniettata in OGNI chiamata API per mantenere coerenza.
+
+FORMATO (usa esattamente questa struttura, max 600 parole):
+
+=== PROJECT MEMORY ===
+APP: [nome e descrizione in 1 riga]
+TIPO: [html-game | static-html | vite-react | nextjs | node-express | fullstack-flask]
+STACK: [framework, librerie, tecnologie]
+OBIETTIVO: [cosa vuole ottenere l'utente, in 2-3 righe]
+FILE: [elenco file con breve ruolo di ciascuno]
+FUNZIONALITÀ:
+- [feature 1 implementata]
+- [feature 2 implementata]
+- ...
+DESIGN:
+- [decisione 1 di design/architettura]
+- [decisione 2]
+STATO: [cosa è stato completato, cosa manca]
+PROBLEMI: [bug noti o issue segnalati, "nessuno" se tutto ok]
+ULTIMA RICHIESTA: [cosa ha chiesto l'utente per ultimo]
+=== FINE MEMORY ===
+
+REGOLE:
+- Se ricevi una memoria esistente, AGGIORNALA (non riscriverla da zero)
+- Aggiungi nuove feature/decisioni, aggiorna lo stato
+- Mantieni le informazioni precedenti che sono ancora rilevanti
+- Sii SPECIFICO: nomi di componenti, endpoint, funzioni chiave
+- Scrivi in italiano`;
+
+  const userContent = `${existingMemory ? 'MEMORIA ATTUALE DA AGGIORNARE:\n' + existingMemory + '\n\n' : 'PRIMA GENERAZIONE — crea la memoria da zero.\n\n'}INFO PROGETTO:
+Nome: ${S.cur.name || 'Senza nome'}
+${plan ? 'Piano: tipo=' + plan.projectType + ', file=' + (plan.fileTree||[]).join(', ') : 'Nessun piano'}
+
+FILE:
+${fileInfo}
+
+${jobInfo}
+${errors ? 'Errori: ' + errors : ''}
+
+RICHIESTE UTENTE RECENTI:
+${userMsgs.map((m, i) => (i+1) + '. ' + m).join('\n')}`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': S.key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: MODELS.haiku,
+        max_tokens: 1200,
+        temperature: 0.2,
+        system: sys,
+        messages: [{ role: 'user', content: userContent }]
+      })
+    });
+    if (!r.ok) throw new Error('API ' + r.status);
+    const data = await r.json();
+    const memory = data.content.map(b => b.text || '').join('').trim();
+    if (memory && memory.includes('PROJECT MEMORY')) {
+      S.cur.projectMemory = memory;
+      save();
+      console.log('[ProjectMemory] Updated (' + memory.length + ' chars)');
+    }
+  } catch (e) {
+    console.warn('[ProjectMemory] Update failed:', e.message);
+  }
+}
+
+// Get current project memory for injection into system prompts
+function getProjectMemory() {
+  if (!S.cur) return '';
+  // Prefer LLM-generated memory, fallback to heuristic summary
+  return S.cur.projectMemory || S.cur.projectSummary || '';
 }
 
 // Build the multi-file system prompt
@@ -1099,7 +1218,7 @@ REGOLE ANTI-BUG:
 - Nessun nome duplicato per scopi diversi. Ogni funzione/import deve esistere.
 - Testa mentalmente il flusso completo. Gestisci edge cases.
 - Se generi un gioco: game loop funzionante dal primo frame, controlli responsivi, collisioni corrette.
-${S.cur?.projectSummary ? '\n' + S.cur.projectSummary + '\n' : ''}${contextPack ? '\n── CONTEXT PACK (dettaglio tecnico) ──\n' + contextPack + '\n── FINE CONTEXT PACK ──\n' : ''}
+${getProjectMemory() ? '\n' + getProjectMemory() + '\n' : ''}${contextPack ? '\n── CONTEXT PACK (dettaglio tecnico) ──\n' + contextPack + '\n── FINE CONTEXT PACK ──\n' : ''}
 FORMATO OUTPUT OBBLIGATORIO — rispondi SOLO con questo JSON valido (nessun testo prima o dopo):
 {
   "summary": "breve descrizione di cosa hai fatto",
@@ -1296,8 +1415,9 @@ Includi:
 
 Scrivi in italiano. Max 800 parole. Sii preciso e specifico, non generico.`;
 
+  const projectMemory = getProjectMemory();
   const userMsg = `PROGETTO: ${S.cur?.name || 'Senza nome'}
-${projectSummary ? '\n' + projectSummary + '\n' : ''}
+${projectMemory ? '\n' + projectMemory + '\n' : ''}
 ${plan ? 'PIANO: tipo=' + plan.projectType + ', file=' + (plan.fileTree||[]).join(', ') + '\n' : ''}
 FILE DEL PROGETTO:
 ${fileDescs}
@@ -1373,9 +1493,10 @@ async function generateFullstack(prompt, qual) {
   const agentPersona = AGENTS[currentAgent]?.systemExtra || '';
   const qd = {pro:'Design professionale, raffinato.',fast:'Implementazione veloce.',detailed:'Molto dettagliato con commenti.'};
 
+  const _mem = getProjectMemory();
   const sysFE = `Sei un expert frontend developer e UI/UX designer. Genera SOLO un file HTML+CSS+JS completo e autocontenuto.
 ${qd[qual]}
-
+${_mem ? '\n' + _mem + '\n' : ''}
 REQUISITI FRONTEND:
 - Design dark mode moderno, palette coerente (CSS custom properties), Google Fonts (Outfit, Plus Jakarta Sans, Sora).
 - Layout responsive mobile-first con CSS Grid/Flexbox, media queries per mobile.
@@ -1396,7 +1517,7 @@ REGOLA ASSOLUTA: solo codice puro, zero markdown, zero backtick, zero spiegazion
 
   const sysBE = `Sei un expert backend developer. Genera SOLO un file Python Flask completo e funzionante.
 ${qd[qual]}
-
+${_mem ? '\n' + _mem + '\n' : ''}
 REQUISITI BACKEND:
 - Flask con flask-cors, struttura pulita e modulare.
 - TUTTI gli endpoint necessari: CRUD completo (GET, POST, PUT/PATCH, DELETE).
@@ -1448,9 +1569,11 @@ async function callAPI(prompt,mode,qual,isEdit,agent='direct') {
   const qd={pro:'Design professionale, raffinato, codice pulito.',fast:'Implementazione veloce ma funzionante.',detailed:'Molto dettagliato con commenti esaustivi.'};
   const ex=S.cur&&Object.keys(S.cur.files).length?`\n\nFILE ATTUALMENTE NEL PROGETTO: ${Object.keys(S.cur.files).join(', ')}\n\nCodice attuale (${S.curFile || Object.keys(S.cur.files)[0]}):\n\`\`\`\n${Object.values(S.cur.files)[0].slice(0,6000)}\n\`\`\``:'';
   const agentPersona = AGENTS[currentAgent]?.systemExtra || '';
+  const _dmem = getProjectMemory();
   const sys=`Sei un expert full-stack developer e UI/UX designer di livello mondiale. Genera codice ${md[mode]} di qualità PROFESSIONALE.
 
 ${qd[qual]}
+${_dmem ? '\n' + _dmem + '\n' : ''}
 
 REQUISITI DI QUALITÀ:
 1. UI/UX professionale: spacing armonioso (8px grid), tipografia con gerarchia (Google Fonts: Outfit, Plus Jakarta Sans, Sora, Manrope). Palette coerente con CSS custom properties.
