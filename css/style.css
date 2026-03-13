@@ -1422,7 +1422,15 @@ body::after {
   .workspace { flex-direction:column; position:relative; min-height:0; }
   .sidebar { width:100%!important; min-width:unset; flex:1; border-right:none; border-bottom:none; overflow:hidden; display:flex; flex-direction:column; min-height:0; padding-bottom:calc(52px + env(safe-area-inset-bottom,0px)); }
   .sidebar .msgs { flex:1; overflow-y:scroll; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; min-height:0; }
-  .sidebar .empty-st { flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+  .sidebar .empty-st { flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; justify-content:flex-start; padding:16px 14px; gap:6px; }
+  .sidebar .empty-st::before, .sidebar .empty-st::after { content:''; flex:1; }
+  .empty-icon { width:44px; height:44px; font-size:20px; border-radius:14px; }
+  .empty-title { font-size:15px; }
+  .empty-sub { font-size:12px; max-width:200px; }
+  .suggestions { flex-direction:row; overflow-x:auto; -webkit-overflow-scrolling:touch; flex-wrap:nowrap; gap:8px; padding-bottom:4px; margin-top:4px; scrollbar-width:none; }
+  .suggestions::-webkit-scrollbar { display:none; }
+  .sug-card { flex-shrink:0; min-width:160px; max-width:200px; padding:8px 10px; border-radius:10px; }
+  .sug-text { font-size:11px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .resizer { display:none; }
   .right { display:none; position:fixed; inset:0; top:48px; bottom:calc(52px + env(safe-area-inset-bottom,0px)); z-index:80; background:#0A0A0A; }
   .right.mobile-show { display:flex; flex-direction:column; }
