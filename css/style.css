@@ -1578,36 +1578,58 @@ body::after {
 .plan-btn.skip:hover { background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7); }
 
 /* ══════════════════════════════════
-   CLARIFY CARD (v8k)
+   MODAL OVERLAYS: CLARIFY + PLAN (v8k)
    ══════════════════════════════════ */
-.clarify-card {
-  margin:8px 0; padding:0; border-radius:14px;
-  background:rgba(255,255,255,0.03); border:1px solid rgba(168,85,247,0.3);
-  overflow:hidden; animation:planSlideIn 0.3s ease;
-  box-shadow:0 0 20px rgba(168,85,247,0.1), 0 2px 8px rgba(0,0,0,0.3);
+
+/* Shared modal header with spinning icon */
+.modal-spin-header {
+  display:flex; align-items:center; gap:14px; padding:20px 24px;
+  border-bottom:1px solid rgba(255,255,255,0.06);
 }
-.clarify-header {
-  display:flex; align-items:center; gap:12px; padding:14px 16px;
-  background:rgba(168,85,247,0.06); border-bottom:1px solid rgba(168,85,247,0.1);
+.modal-spin-icon {
+  font-size:28px;
+  animation:modalIconSpin 3s linear infinite;
+  display:inline-block;
 }
-.clarify-icon { font-size:22px; }
+@keyframes modalIconSpin {
+  0% { transform:rotate(0deg) scale(1); }
+  25% { transform:rotate(90deg) scale(1.1); }
+  50% { transform:rotate(180deg) scale(1); }
+  75% { transform:rotate(270deg) scale(1.1); }
+  100% { transform:rotate(360deg) scale(1); }
+}
+
+/* Scrollable body for modal content */
+.modal-scroll-body {
+  padding:16px 24px; overflow-y:auto; flex:1; min-height:0;
+}
+
+/* ── Clarify Modal ── */
+.clarify-modal {
+  border:1px solid rgba(168,85,247,0.35) !important;
+  box-shadow:0 0 40px rgba(168,85,247,0.15), 0 8px 32px rgba(0,0,0,0.5) !important;
+  width:520px;
+}
+.clarify-modal .modal-spin-header {
+  background:rgba(168,85,247,0.06);
+  border-bottom-color:rgba(168,85,247,0.12);
+}
 .clarify-title-wrap { flex:1; }
-.clarify-title { font-family:'Outfit',sans-serif; font-size:14px; font-weight:700; color:#fff; }
-.clarify-subtitle { font-size:11px; color:rgba(255,255,255,0.4); margin-top:1px; }
-.clarify-body { padding:12px 16px; display:flex; flex-direction:column; gap:14px; }
-.clarify-q { display:flex; flex-direction:column; gap:8px; }
+.clarify-title { font-family:'Outfit',sans-serif; font-size:16px; font-weight:700; color:#fff; }
+.clarify-subtitle { font-size:12px; color:rgba(255,255,255,0.4); margin-top:2px; }
+.clarify-q { display:flex; flex-direction:column; gap:8px; margin-bottom:6px; }
 .clarify-q-text {
   font-size:13px; font-weight:600; color:rgba(255,255,255,0.85);
   display:flex; align-items:baseline; gap:8px;
 }
 .clarify-q-num {
-  width:20px; height:20px; border-radius:50%; display:inline-flex;
-  align-items:center; justify-content:center; font-size:10px; font-weight:700;
+  width:22px; height:22px; border-radius:50%; display:inline-flex;
+  align-items:center; justify-content:center; font-size:11px; font-weight:700;
   background:rgba(168,85,247,0.15); color:#a855f7; flex-shrink:0;
 }
 .clarify-opts { display:flex; flex-wrap:wrap; gap:6px; }
 .clarify-opt {
-  padding:6px 14px; border-radius:20px; font-size:12px; font-weight:500;
+  padding:7px 16px; border-radius:20px; font-size:12px; font-weight:500;
   background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1);
   color:rgba(255,255,255,0.6); cursor:pointer; transition:all 0.2s;
   font-family:'Outfit',sans-serif;
@@ -1622,7 +1644,7 @@ body::after {
   box-shadow:0 0 8px rgba(168,85,247,0.15);
 }
 .clarify-custom {
-  width:100%; padding:7px 12px; border-radius:10px; font-size:11px;
+  width:100%; padding:8px 12px; border-radius:10px; font-size:12px;
   background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);
   color:#fff; font-family:'DM Sans',sans-serif; outline:none;
   transition:border-color 0.15s;
@@ -1631,12 +1653,11 @@ body::after {
 .clarify-custom::placeholder { color:rgba(255,255,255,0.2); }
 .clarify-custom:disabled { opacity:0.4; }
 .clarify-actions {
-  display:flex; gap:8px; padding:14px 16px; border-top:1px solid rgba(168,85,247,0.1);
+  display:flex; gap:8px; padding:16px 24px; border-top:1px solid rgba(168,85,247,0.12);
   background:rgba(168,85,247,0.03);
-  position:sticky; bottom:0; z-index:2;
 }
 .clarify-btn {
-  padding:10px 20px; border-radius:12px; font-family:'Outfit',sans-serif;
+  padding:12px 24px; border-radius:12px; font-family:'Outfit',sans-serif;
   font-size:14px; font-weight:700; cursor:pointer; border:none;
   transition:all 0.2s;
 }
@@ -1651,4 +1672,15 @@ body::after {
   border:1px solid rgba(255,255,255,0.08);
 }
 .clarify-btn.skip:hover { background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7); }
+
+/* ── Plan Modal ── */
+.plan-modal {
+  border:1px solid rgba(255,159,28,0.35) !important;
+  box-shadow:0 0 40px rgba(255,159,28,0.12), 0 8px 32px rgba(0,0,0,0.5) !important;
+  width:560px;
+}
+.plan-header-modal {
+  background:rgba(255,159,28,0.06);
+  border-bottom-color:rgba(255,159,28,0.12);
+}
 
