@@ -1420,11 +1420,13 @@ body::after {
   .api-btn { padding:5px 10px; font-size:10px; }
   .model-btn,.agent-sel-btn { padding:5px 10px; font-size:11px; }
   .workspace { flex-direction:column; position:relative; }
-  .sidebar { width:100%!important; min-width:unset; max-height:none; height:auto; flex:1; border-right:none; border-bottom:none; overflow:hidden; display:flex; flex-direction:column; padding-bottom:calc(52px + env(safe-area-inset-bottom,0px)); }
+  .sidebar { width:100%!important; min-width:unset; max-height:none; height:auto; flex:1; border-right:none; border-bottom:none; overflow:hidden; display:flex; flex-direction:column; min-height:0; padding-bottom:calc(52px + env(safe-area-inset-bottom,0px)); }
   .sidebar .msgs { flex:1; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; min-height:0; }
   .resizer { display:none; }
   .right { display:none; position:fixed; inset:0; top:48px; bottom:calc(52px + env(safe-area-inset-bottom,0px)); z-index:80; background:#0A0A0A; }
   .right.mobile-show { display:flex; flex-direction:column; }
+  .right.mobile-show .panel.on { overflow:auto; -webkit-overflow-scrolling:touch; }
+  .right.mobile-show #prev-frame { -webkit-overflow-scrolling:touch; }
   .mobile-nav { display:flex!important; position:fixed; bottom:0; left:0; right:0; height:52px; background:rgba(10,10,10,0.95); backdrop-filter:blur(20px) saturate(160%); border-top:1px solid rgba(255,255,255,0.08); z-index:90; padding:0 8px; padding-bottom:env(safe-area-inset-bottom,0); align-items:center; justify-content:space-around; }
   .mobile-nav-btn { display:flex; flex-direction:column; align-items:center; gap:2px; padding:6px 12px; border:none; background:transparent; color:rgba(255,255,255,0.35); font-family:'Outfit',sans-serif; font-size:10px; font-weight:500; cursor:pointer; -webkit-tap-highlight-color:transparent; }
   .mobile-nav-btn .mnav-icon { font-size:18px; }
