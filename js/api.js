@@ -149,16 +149,15 @@ QUANDO NON CHIEDERE (needsClarification: false):
   return { needsClarification: false, questions: [] };
 }
 
-// Show clarification questions in chat and wait for answers
+// Show clarification questions as a centered modal overlay
 function showClarifyUI(clarifyData) {
   if (!clarifyData || !clarifyData.needsClarification || !clarifyData.questions?.length) {
     return Promise.resolve(null);
   }
 
   return new Promise((resolve) => {
-    const mc = document.getElementById('msgs');
-    const card = document.createElement('div');
-    card.className = 'clarify-card';
+    const modal = document.getElementById('clarify-modal');
+    const ov = document.getElementById('clarify-ov');
 
     const questionsHTML = clarifyData.questions.map((q, i) => {
       const optionsHTML = (q.options || []).map(opt =>
@@ -172,53 +171,48 @@ function showClarifyUI(clarifyData) {
         '</div>';
     }).join('');
 
-    card.innerHTML =
-      '<div class="clarify-header">' +
-        '<div class="clarify-icon">💬</div>' +
+    modal.innerHTML =
+      '<div class="modal-spin-header">' +
+        '<div class="modal-spin-icon">💬</div>' +
         '<div class="clarify-title-wrap">' +
           '<div class="clarify-title">Prima di iniziare…</div>' +
           '<div class="clarify-subtitle">Rispondi per personalizzare il risultato</div>' +
         '</div>' +
       '</div>' +
-      '<div class="clarify-body">' + questionsHTML + '</div>' +
+      '<div class="modal-scroll-body">' + questionsHTML + '</div>' +
       '<div class="clarify-actions">' +
         '<button class="clarify-btn confirm" id="clarify-confirm-btn">✓ Conferma e genera</button>' +
         '<button class="clarify-btn skip" id="clarify-skip-btn">⏭ Salta — genera subito</button>' +
       '</div>';
 
-    mc.appendChild(card);
-    card.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'end' }), 500);
+    ov.classList.add('open');
 
     // Handle option clicks — toggle selected
-    card.querySelectorAll('.clarify-opt').forEach(btn => {
+    modal.querySelectorAll('.clarify-opt').forEach(btn => {
       btn.addEventListener('click', () => {
         const qid = btn.dataset.qid;
-        // Deselect siblings
-        card.querySelectorAll('.clarify-opt[data-qid="' + qid + '"]').forEach(b => b.classList.remove('selected'));
+        modal.querySelectorAll('.clarify-opt[data-qid="' + qid + '"]').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
-        // Clear custom input for this question
-        const customInp = card.querySelector('.clarify-custom[data-qid="' + qid + '"]');
+        const customInp = modal.querySelector('.clarify-custom[data-qid="' + qid + '"]');
         if (customInp) customInp.value = '';
       });
     });
 
     // Custom input clears option selection
-    card.querySelectorAll('.clarify-custom').forEach(inp => {
+    modal.querySelectorAll('.clarify-custom').forEach(inp => {
       inp.addEventListener('input', () => {
         if (inp.value.trim()) {
           const qid = inp.dataset.qid;
-          card.querySelectorAll('.clarify-opt[data-qid="' + qid + '"]').forEach(b => b.classList.remove('selected'));
+          modal.querySelectorAll('.clarify-opt[data-qid="' + qid + '"]').forEach(b => b.classList.remove('selected'));
         }
       });
     });
 
-    // Collect answers and resolve
     const collectAnswers = () => {
       const answers = {};
       clarifyData.questions.forEach(q => {
-        const selected = card.querySelector('.clarify-opt[data-qid="' + q.id + '"].selected');
-        const custom = card.querySelector('.clarify-custom[data-qid="' + q.id + '"]');
+        const selected = modal.querySelector('.clarify-opt[data-qid="' + q.id + '"].selected');
+        const custom = modal.querySelector('.clarify-custom[data-qid="' + q.id + '"]');
         if (custom && custom.value.trim()) {
           answers[q.id] = { question: q.text, answer: custom.value.trim() };
         } else if (selected) {
@@ -228,13 +222,9 @@ function showClarifyUI(clarifyData) {
       return answers;
     };
 
-    // Confirm: collect answers and build enriched prompt
     document.getElementById('clarify-confirm-btn').onclick = () => {
       const answers = collectAnswers();
-      card.querySelectorAll('.clarify-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
-      card.querySelectorAll('.clarify-custom').forEach(inp => { inp.disabled = true; });
-
-      // Build context string from answers
+      ov.classList.remove('open');
       let context = '';
       const answered = Object.values(answers);
       if (answered.length > 0) {
@@ -242,19 +232,18 @@ function showClarifyUI(clarifyData) {
         const summaryParts = answered.map(a => a.answer);
         addLog('plan', '💬', 'Chiarimenti', summaryParts.join(' · '));
         saveMsg('ai', '💬 Risposte: ' + summaryParts.join(', '));
+        renderBbl('ai', '💬 **Preferenze salvate:** ' + summaryParts.join(', '));
       }
       resolve(context);
     };
 
-    // Skip: resolve with empty string
     document.getElementById('clarify-skip-btn').onclick = () => {
-      card.querySelectorAll('.clarify-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
+      ov.classList.remove('open');
       addLog('plan', '⏭', 'Chiarimenti saltati', 'Generazione con parametri default');
       resolve('');
     };
 
     saveMsg('ai', '💬 ' + clarifyData.questions.length + ' domande chiarificatrici');
-    toast('💬 Rispondi alle domande per personalizzare il risultato', 'ok');
   });
 }
 
@@ -340,9 +329,8 @@ function showPlanInUI(plan) {
 
   return new Promise((resolve) => {
     const fileCount = plan.fileTree ? plan.fileTree.length : 0;
-    const mc = document.getElementById('msgs');
-    const card = document.createElement('div');
-    card.className = 'plan-card';
+    const modal = document.getElementById('plan-modal');
+    const ov = document.getElementById('plan-ov');
 
     // Stack info
     const stackParts = [];
@@ -376,9 +364,9 @@ function showPlanInUI(plan) {
         '</div>'
       : '';
 
-    card.innerHTML =
-      '<div class="plan-header">' +
-        '<div class="plan-icon">📋</div>' +
+    modal.innerHTML =
+      '<div class="modal-spin-header plan-header-modal">' +
+        '<div class="modal-spin-icon">📋</div>' +
         '<div class="plan-title-wrap">' +
           '<div class="plan-title">Piano progetto</div>' +
           '<div class="plan-type">' + (plan.projectType || '') + ' · ' + fileCount + ' file</div>' +
@@ -386,47 +374,41 @@ function showPlanInUI(plan) {
       '</div>' +
       (stackParts.length ? '<div class="plan-stack">' + stackParts.join('') + '</div>' : '') +
       routeInfo +
-      '<div class="plan-section">' +
-        '<div class="plan-section-title">File da generare</div>' +
-        '<div class="plan-files" id="plan-files-list">' + fileChipsHTML + '</div>' +
-        '<div class="plan-add-file"><input type="text" class="plan-add-input" id="plan-add-input" placeholder="Aggiungi file… (es. src/utils.js)" onkeydown="if(event.key===\'Enter\')addPlanFile()"><button class="plan-add-btn" onclick="addPlanFile()">+</button></div>' +
+      '<div class="modal-scroll-body">' +
+        '<div class="plan-section">' +
+          '<div class="plan-section-title">File da generare</div>' +
+          '<div class="plan-files" id="plan-files-list">' + fileChipsHTML + '</div>' +
+          '<div class="plan-add-file"><input type="text" class="plan-add-input" id="plan-add-input" placeholder="Aggiungi file… (es. src/utils.js)" onkeydown="if(event.key===\'Enter\')addPlanFile()"><button class="plan-add-btn" onclick="addPlanFile()">+</button></div>' +
+        '</div>' +
+        (milestoneHTML ? '<div class="plan-section"><div class="plan-section-title">Milestones</div>' + milestoneHTML + '</div>' : '') +
+        (notesHTML ? '<div class="plan-section"><div class="plan-section-title">Note</div>' + notesHTML + '</div>' : '') +
       '</div>' +
-      (milestoneHTML ? '<div class="plan-section"><div class="plan-section-title">Milestones</div>' + milestoneHTML + '</div>' : '') +
-      (notesHTML ? '<div class="plan-section"><div class="plan-section-title">Note</div>' + notesHTML + '</div>' : '') +
       '<div class="plan-actions">' +
         '<button class="plan-btn confirm" id="plan-confirm-btn">▶ Genera progetto</button>' +
         '<button class="plan-btn skip" id="plan-skip-btn">⏭ Salta piano</button>' +
       '</div>';
 
-    mc.appendChild(card);
-    card.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    // iOS Safari fallback: re-scroll after layout settles
-    setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'end' }), 500);
+    ov.classList.add('open');
 
     saveMsg('ai', '📋 Piano: ' + fileCount + ' file, ' + (plan.milestones||[]).length + ' step');
-    toast('📋 Piano pronto — clicca ▶ per generare', 'ok');
 
     // ── Confirm: read back edited file list and resolve ──
     document.getElementById('plan-confirm-btn').onclick = () => {
-      // Read file chips from DOM (user may have added/removed)
-      const chips = card.querySelectorAll('.plan-file-chip');
+      const chips = modal.querySelectorAll('.plan-file-chip');
       const editedFiles = [...chips].map(c => c.dataset.file).filter(Boolean);
       if (editedFiles.length > 0) {
         plan.fileTree = editedFiles;
-        // Rebuild milestones to cover new files
         plan = enforcePlanMinimum(plan, S.currentJob?.userGoal || '');
       }
-      // Disable buttons
-      card.querySelectorAll('.plan-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
-      card.querySelector('.plan-add-file')?.remove();
-      card.querySelectorAll('.plan-file-rm').forEach(b => b.remove());
+      ov.classList.remove('open');
       addLog('plan', '✅', 'Piano confermato', editedFiles.length + ' file — avvio generazione');
+      renderBbl('ai', '📋 **Piano confermato** — ' + editedFiles.length + ' file, avvio generazione…');
       resolve(plan);
     };
 
     // ── Skip: resolve with null to trigger fallback single-shot ──
     document.getElementById('plan-skip-btn').onclick = () => {
-      card.querySelectorAll('.plan-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
+      ov.classList.remove('open');
       addLog('plan', '⏭', 'Piano saltato', 'Generazione diretta senza piano');
       resolve(null);
     };
