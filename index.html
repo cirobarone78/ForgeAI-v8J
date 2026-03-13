@@ -752,6 +752,32 @@ async function send() {
 
 async function runAgents(prompt,mode,qual) {
   let hasCode=S.cur&&Object.keys(S.cur.files||{}).length>0;
+
+  // ── CLARIFY PHASE (v8k): ask clarifying questions before planning ──
+  if (!hasCode) {
+    activateChip('plan');
+    addLog('plan','💬','Analisi','Verifico se servono chiarimenti…');
+    try {
+      stopProg(); // pause progress while waiting for user
+      const clarifyData = await callAPIClarify(prompt, mode);
+      if (clarifyData && clarifyData.needsClarification && clarifyData.questions?.length) {
+        const extraContext = await showClarifyUI(clarifyData);
+        if (extraContext) {
+          prompt = prompt + extraContext;
+          // Also update history so generation sees the clarifications
+          S.history[S.history.length - 1] = { role: 'user', content: prompt };
+        }
+      } else {
+        addLog('plan','✅','Analisi','Richiesta chiara — procedo al planning');
+      }
+      startProg();
+    } catch(clarifyErr) {
+      console.warn('Clarify skipped:', clarifyErr.message);
+      addLog('plan','⚠️','Analisi','Chiarimenti non disponibili: ' + clarifyErr.message);
+      startProg();
+    }
+  }
+
   activateChip('plan');
   addLog('plan','📋','Planning Agent',hasCode?'Analisi modifiche richieste…':'Analisi requisiti → struttura → componenti');
   await sleep(700);

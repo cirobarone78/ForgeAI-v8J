@@ -1577,3 +1577,78 @@ body::after {
 }
 .plan-btn.skip:hover { background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7); }
 
+/* ══════════════════════════════════
+   CLARIFY CARD (v8k)
+   ══════════════════════════════════ */
+.clarify-card {
+  margin:8px 0; padding:0; border-radius:14px;
+  background:rgba(255,255,255,0.03); border:1px solid rgba(168,85,247,0.3);
+  overflow:hidden; animation:planSlideIn 0.3s ease;
+  box-shadow:0 0 20px rgba(168,85,247,0.1), 0 2px 8px rgba(0,0,0,0.3);
+}
+.clarify-header {
+  display:flex; align-items:center; gap:12px; padding:14px 16px;
+  background:rgba(168,85,247,0.06); border-bottom:1px solid rgba(168,85,247,0.1);
+}
+.clarify-icon { font-size:22px; }
+.clarify-title-wrap { flex:1; }
+.clarify-title { font-family:'Outfit',sans-serif; font-size:14px; font-weight:700; color:#fff; }
+.clarify-subtitle { font-size:11px; color:rgba(255,255,255,0.4); margin-top:1px; }
+.clarify-body { padding:12px 16px; display:flex; flex-direction:column; gap:14px; }
+.clarify-q { display:flex; flex-direction:column; gap:8px; }
+.clarify-q-text {
+  font-size:13px; font-weight:600; color:rgba(255,255,255,0.85);
+  display:flex; align-items:baseline; gap:8px;
+}
+.clarify-q-num {
+  width:20px; height:20px; border-radius:50%; display:inline-flex;
+  align-items:center; justify-content:center; font-size:10px; font-weight:700;
+  background:rgba(168,85,247,0.15); color:#a855f7; flex-shrink:0;
+}
+.clarify-opts { display:flex; flex-wrap:wrap; gap:6px; }
+.clarify-opt {
+  padding:6px 14px; border-radius:20px; font-size:12px; font-weight:500;
+  background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1);
+  color:rgba(255,255,255,0.6); cursor:pointer; transition:all 0.2s;
+  font-family:'Outfit',sans-serif;
+}
+.clarify-opt:hover {
+  background:rgba(168,85,247,0.1); border-color:rgba(168,85,247,0.3);
+  color:rgba(255,255,255,0.85);
+}
+.clarify-opt.selected {
+  background:rgba(168,85,247,0.2); border-color:rgba(168,85,247,0.5);
+  color:#d8b4fe; font-weight:600;
+  box-shadow:0 0 8px rgba(168,85,247,0.15);
+}
+.clarify-custom {
+  width:100%; padding:7px 12px; border-radius:10px; font-size:11px;
+  background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);
+  color:#fff; font-family:'DM Sans',sans-serif; outline:none;
+  transition:border-color 0.15s;
+}
+.clarify-custom:focus { border-color:rgba(168,85,247,0.4); }
+.clarify-custom::placeholder { color:rgba(255,255,255,0.2); }
+.clarify-custom:disabled { opacity:0.4; }
+.clarify-actions {
+  display:flex; gap:8px; padding:14px 16px; border-top:1px solid rgba(168,85,247,0.1);
+  background:rgba(168,85,247,0.03);
+  position:sticky; bottom:0; z-index:2;
+}
+.clarify-btn {
+  padding:10px 20px; border-radius:12px; font-family:'Outfit',sans-serif;
+  font-size:14px; font-weight:700; cursor:pointer; border:none;
+  transition:all 0.2s;
+}
+.clarify-btn.confirm {
+  background:linear-gradient(135deg, #a855f7, #7c3aed); color:#fff;
+  box-shadow:0 2px 16px rgba(168,85,247,0.3);
+  flex:1;
+}
+.clarify-btn.confirm:hover { box-shadow:0 4px 24px rgba(168,85,247,0.4); transform:translateY(-1px); }
+.clarify-btn.skip {
+  background:rgba(255,255,255,0.05); color:rgba(255,255,255,0.5);
+  border:1px solid rgba(255,255,255,0.08);
+}
+.clarify-btn.skip:hover { background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7); }
+
