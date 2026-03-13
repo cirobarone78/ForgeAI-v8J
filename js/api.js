@@ -224,9 +224,12 @@ function showPlanInUI(plan) {
       '</div>';
 
     mc.appendChild(card);
-    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    // iOS Safari fallback: re-scroll after layout settles
+    setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'end' }), 500);
 
     saveMsg('ai', '📋 Piano: ' + fileCount + ' file, ' + (plan.milestones||[]).length + ' step');
+    toast('📋 Piano pronto — clicca ▶ per generare', 'ok');
 
     // ── Confirm: read back edited file list and resolve ──
     document.getElementById('plan-confirm-btn').onclick = () => {
