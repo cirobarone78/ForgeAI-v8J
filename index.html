@@ -36,7 +36,7 @@
         <div class="auto-icon">🤖</div>
         <div class="model-info">
           <div class="model-name">Auto</div>
-          <div class="model-desc">Ogni agente usa il modello ottimale</div>
+          <div class="model-desc">Routing intelligente per fase (Haiku→Opus)</div>
         </div>
         <span class="model-badge auto">Smart</span>
       </div>
@@ -577,7 +577,29 @@ let currentAgent = 'e1';
 
 function getModelForAgent(agent) {
   if (S.model !== 'auto') return MODELS[S.model];
-  return MODELS.sonnet;
+
+  // ── AUTO-ROUTING: modello ottimale per ogni fase della pipeline ──
+  const isComplex = S.cur?.plan?.fileTree?.length > 5 ||
+    COMPLEX_KEYWORDS.test(S.currentJob?.userGoal || '');
+
+  const ROUTING = {
+    // Planning: Sonnet è sufficiente per architettura
+    plan:  MODELS.sonnet,
+    // UI/Frontend: Haiku per pattern CSS/HTML (veloce, economico)
+    ui:    isComplex ? MODELS.sonnet : MODELS.haiku,
+    // Logic/Backend: Sonnet standard, Opus per logica complessa
+    logic: isComplex ? MODELS.opus : MODELS.sonnet,
+    // Testing/Review: Sonnet per accuratezza
+    test:  MODELS.sonnet,
+    // Fix: Opus per comprensione profonda dei bug
+    fix:   MODELS.opus
+  };
+
+  const model = ROUTING[agent] || MODELS.sonnet;
+  // Log routing decision for transparency
+  const modelName = Object.entries(MODELS).find(([k,v]) => v === model)?.[0] || '?';
+  console.log(`[Auto-Route] ${agent} → ${modelName}${isComplex ? ' (complex)' : ''}`);
+  return model;
 }
 
 function selectModel(id) {
@@ -794,9 +816,17 @@ async function runAgents(prompt,mode,qual) {
       if (plan) {
         S.cur.plan = plan;
         save();
-        showPlanInUI(plan);
-        updateProjectSummary(job, plan);
         addLog('plan','✅','Planning Agent','Piano completato — ' + (plan.fileTree||[]).length + ' file pianificati');
+        // ── INTERACTIVE PLAN: wait for user confirmation ──
+        stopProg(); // pause progress bar while waiting
+        plan = await showPlanInUI(plan);
+        // User confirmed (or skipped) — resume pipeline
+        startProg();
+        if (plan) {
+          S.cur.plan = plan; // may have been edited
+          save();
+          updateProjectSummary(job, plan);
+        }
       }
     } catch(planErr) {
       console.warn('Plan skipped:', planErr.message);
@@ -827,6 +857,14 @@ async function runAgents(prompt,mode,qual) {
   }
 
   deactivateChip('plan'); activateChip('ui');
+  // ── Log auto-routing info ──
+  if (S.model === 'auto') {
+    const isComplex = S.cur?.plan?.fileTree?.length > 5 || COMPLEX_KEYWORDS.test(prompt);
+    const routeDesc = isComplex
+      ? 'Plan→Sonnet, UI→Sonnet, Logic→Opus, Test→Sonnet'
+      : 'Plan→Sonnet, UI→Haiku, Logic→Sonnet, Test→Sonnet';
+    addLog('plan', '🔀', 'Auto-Route', routeDesc + (isComplex ? ' (progetto complesso)' : ''));
+  }
   updateJob(job, { status: 'APPLY' });
   // SNAPSHOT: save state before changes
   if (S.cur.files && Object.keys(S.cur.files).length) saveSnapshot('Pre-job: ' + prompt.slice(0, 40), job.id);

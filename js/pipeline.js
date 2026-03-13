@@ -150,7 +150,7 @@ REGOLA ASSOLUTA: SOLO codice puro. Zero spiegazioni, zero markdown, zero backtic
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
     body: JSON.stringify({
-      model: MODELS.sonnet, max_tokens: 32000, temperature: 0.3, system: reviewSys,
+      model: getModelForAgent('test'), max_tokens: 32000, temperature: 0.3, system: reviewSys,
       messages: [{ role: 'user', content: reviewMsg }]
     })
   });
@@ -598,7 +598,7 @@ ISTRUZIONI: Correggi TUTTI i problemi CRITICI. Per i problemi UI, aggiungi styli
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
-        model: MODELS.sonnet, max_tokens: 32000, temperature: 0.3, system: fixSys,
+        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.3, system: fixSys,
         messages: [{ role: 'user', content: fixMsg }]
       })
     });

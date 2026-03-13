@@ -138,7 +138,7 @@ ${existingFiles}`;
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
     body: JSON.stringify({
-      model: MODELS.sonnet, max_tokens: 2000, temperature: 0.3, system: planSys,
+      model: getModelForAgent('plan'), max_tokens: 2000, temperature: 0.3, system: planSys,
       messages: [{ role: 'user', content: prompt }]
     })
   });
@@ -161,27 +161,115 @@ ${existingFiles}`;
 }
 
 function showPlanInUI(plan) {
-  if (!plan) return;
-  const fileCount = plan.fileTree ? plan.fileTree.length : 0;
-  const milestoneText = (plan.milestones || []).map((m, i) =>
-    `${i+1}. **${m.name}** (${(m.files||[]).join(', ')})`
-  ).join('\n');
-  const notesText = (plan.notes || []).map(n => '• ' + n).join('\n');
+  if (!plan) return Promise.resolve(plan);
 
-  let msg = '📋 **Piano progetto** — ' + (plan.projectType || 'unknown') + '\n';
-  msg += '📁 **' + fileCount + ' file**: ' + (plan.fileTree || []).join(', ') + '\n';
-  if (plan.stack) {
-    const parts = [];
-    if (plan.stack.frontend && plan.stack.frontend !== 'none') parts.push('FE: ' + plan.stack.frontend);
-    if (plan.stack.backend && plan.stack.backend !== 'none') parts.push('BE: ' + plan.stack.backend);
-    if (plan.stack.db && plan.stack.db !== 'none') parts.push('DB: ' + plan.stack.db);
-    if (parts.length) msg += '🔧 **Stack**: ' + parts.join(' | ') + '\n';
-  }
-  if (milestoneText) msg += '\n' + milestoneText + '\n';
-  if (notesText) msg += '\n' + notesText;
+  return new Promise((resolve) => {
+    const fileCount = plan.fileTree ? plan.fileTree.length : 0;
+    const mc = document.getElementById('msgs');
+    const card = document.createElement('div');
+    card.className = 'plan-card';
 
-  renderBbl('ai', msg);
-  saveMsg('ai', '📋 Piano: ' + fileCount + ' file, ' + (plan.milestones||[]).length + ' step');
+    // Stack info
+    const stackParts = [];
+    if (plan.stack) {
+      if (plan.stack.frontend && plan.stack.frontend !== 'none') stackParts.push('<span class="plan-stack-tag fe">FE: ' + plan.stack.frontend + '</span>');
+      if (plan.stack.backend && plan.stack.backend !== 'none') stackParts.push('<span class="plan-stack-tag be">BE: ' + plan.stack.backend + '</span>');
+      if (plan.stack.db && plan.stack.db !== 'none') stackParts.push('<span class="plan-stack-tag db">DB: ' + plan.stack.db + '</span>');
+    }
+
+    // Milestones
+    const milestoneHTML = (plan.milestones || []).map((m, i) =>
+      '<div class="plan-milestone"><span class="plan-ms-num">' + (i+1) + '</span><span class="plan-ms-name">' + m.name + '</span><span class="plan-ms-files">' + (m.files||[]).join(', ') + '</span></div>'
+    ).join('');
+
+    // File tree with editable chips
+    const fileChipsHTML = (plan.fileTree || []).map(f =>
+      '<span class="plan-file-chip" data-file="' + f + '">' + ficon(f) + ' ' + f + '<button class="plan-file-rm" title="Rimuovi file" onclick="this.parentElement.remove()">×</button></span>'
+    ).join('');
+
+    // Notes
+    const notesHTML = (plan.notes || []).map(n => '<div class="plan-note">• ' + n + '</div>').join('');
+
+    // Model routing preview
+    const isComplex = fileCount > 5 || COMPLEX_KEYWORDS.test(S.currentJob?.userGoal || '');
+    const routeInfo = S.model === 'auto'
+      ? '<div class="plan-route"><span class="plan-route-label">Auto-Route:</span>' +
+        '<span class="plan-route-chip plan">Plan → Sonnet</span>' +
+        '<span class="plan-route-chip ui">UI → ' + (isComplex ? 'Sonnet' : 'Haiku') + '</span>' +
+        '<span class="plan-route-chip logic">Logic → ' + (isComplex ? 'Opus' : 'Sonnet') + '</span>' +
+        '<span class="plan-route-chip test">Test → Sonnet</span>' +
+        '</div>'
+      : '';
+
+    card.innerHTML =
+      '<div class="plan-header">' +
+        '<div class="plan-icon">📋</div>' +
+        '<div class="plan-title-wrap">' +
+          '<div class="plan-title">Piano progetto</div>' +
+          '<div class="plan-type">' + (plan.projectType || '') + ' · ' + fileCount + ' file</div>' +
+        '</div>' +
+      '</div>' +
+      (stackParts.length ? '<div class="plan-stack">' + stackParts.join('') + '</div>' : '') +
+      routeInfo +
+      '<div class="plan-section">' +
+        '<div class="plan-section-title">File da generare</div>' +
+        '<div class="plan-files" id="plan-files-list">' + fileChipsHTML + '</div>' +
+        '<div class="plan-add-file"><input type="text" class="plan-add-input" id="plan-add-input" placeholder="Aggiungi file… (es. src/utils.js)" onkeydown="if(event.key===\'Enter\')addPlanFile()"><button class="plan-add-btn" onclick="addPlanFile()">+</button></div>' +
+      '</div>' +
+      (milestoneHTML ? '<div class="plan-section"><div class="plan-section-title">Milestones</div>' + milestoneHTML + '</div>' : '') +
+      (notesHTML ? '<div class="plan-section"><div class="plan-section-title">Note</div>' + notesHTML + '</div>' : '') +
+      '<div class="plan-actions">' +
+        '<button class="plan-btn confirm" id="plan-confirm-btn">▶ Genera progetto</button>' +
+        '<button class="plan-btn skip" id="plan-skip-btn">⏭ Salta piano</button>' +
+      '</div>';
+
+    mc.appendChild(card);
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    saveMsg('ai', '📋 Piano: ' + fileCount + ' file, ' + (plan.milestones||[]).length + ' step');
+
+    // ── Confirm: read back edited file list and resolve ──
+    document.getElementById('plan-confirm-btn').onclick = () => {
+      // Read file chips from DOM (user may have added/removed)
+      const chips = card.querySelectorAll('.plan-file-chip');
+      const editedFiles = [...chips].map(c => c.dataset.file).filter(Boolean);
+      if (editedFiles.length > 0) {
+        plan.fileTree = editedFiles;
+        // Rebuild milestones to cover new files
+        plan = enforcePlanMinimum(plan, S.currentJob?.userGoal || '');
+      }
+      // Disable buttons
+      card.querySelectorAll('.plan-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
+      card.querySelector('.plan-add-file')?.remove();
+      card.querySelectorAll('.plan-file-rm').forEach(b => b.remove());
+      addLog('plan', '✅', 'Piano confermato', editedFiles.length + ' file — avvio generazione');
+      resolve(plan);
+    };
+
+    // ── Skip: resolve with null to trigger fallback single-shot ──
+    document.getElementById('plan-skip-btn').onclick = () => {
+      card.querySelectorAll('.plan-btn').forEach(b => { b.disabled = true; b.style.opacity = '0.4'; });
+      addLog('plan', '⏭', 'Piano saltato', 'Generazione diretta senza piano');
+      resolve(null);
+    };
+  });
+}
+
+// Helper: add a file chip to the plan editor
+function addPlanFile() {
+  const inp = document.getElementById('plan-add-input');
+  const val = (inp?.value || '').trim();
+  if (!val) return;
+  const list = document.getElementById('plan-files-list');
+  if (!list) return;
+  // Avoid duplicates
+  if (list.querySelector('[data-file="' + val + '"]')) { inp.value = ''; return; }
+  const chip = document.createElement('span');
+  chip.className = 'plan-file-chip';
+  chip.dataset.file = val;
+  chip.innerHTML = ficon(val) + ' ' + val + '<button class="plan-file-rm" title="Rimuovi file" onclick="this.parentElement.remove()">×</button>';
+  list.appendChild(chip);
+  inp.value = '';
 }
 
 // ══════════════════════════════════
