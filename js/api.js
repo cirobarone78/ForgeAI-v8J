@@ -1201,6 +1201,161 @@ function showNextBatchBtn(nextBatch, mode, qual) {
   renderBbl('ai', `ℹ️ **Progetto troppo grande per un batch.** ${nextBatch.reason || ''}\nClicca il pulsante per generare i file rimanenti.`);
 }
 
+// ══════════════════════════════════
+// CONTEXT TRANSFER (stile Emergent)
+// ══════════════════════════════════
+// When the chat gets too long, offer to compress the conversation into
+// a compact summary and restart with a clean context window.
+
+let _ctxTransferSkippedAt = 0; // timestamp of last "skip"
+
+function checkContextTransfer() {
+  if (!S.cur || !S.history) return;
+  // Cooldown: don't ask again within 8 messages of a skip
+  if (_ctxTransferSkippedAt && S.history.length - _ctxTransferSkippedAt < 8) return;
+
+  const histLen = S.history.length;
+  const totalChars = S.history.reduce((sum, m) => {
+    const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    return sum + c.length;
+  }, 0);
+
+  // Thresholds: 16+ messages OR 120K+ chars
+  if (histLen >= 16 || totalChars > 120000) {
+    showContextTransferModal();
+  }
+}
+
+function showContextTransferModal() {
+  const ov = document.getElementById('ctx-transfer-ov');
+  const btn = document.getElementById('ctx-transfer-btn');
+  const skipBtn = document.getElementById('ctx-skip-btn');
+  if (!ov) return;
+
+  ov.classList.add('open');
+
+  btn.disabled = false;
+  btn.textContent = '✓ Trasferisci contesto';
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = '⏳ Generazione riassunto…';
+    try {
+      const summary = await generateContextSummary();
+      applyContextTransfer(summary);
+      ov.classList.remove('open');
+    } catch (err) {
+      console.warn('Context transfer failed:', err);
+      btn.disabled = false;
+      btn.textContent = '✓ Trasferisci contesto';
+      toast('⚠️ Trasferimento fallito: ' + err.message, 'err');
+      ov.classList.remove('open');
+    }
+  };
+
+  skipBtn.onclick = () => {
+    _ctxTransferSkippedAt = S.history.length;
+    ov.classList.remove('open');
+  };
+}
+
+async function generateContextSummary() {
+  const files = S.cur?.files || {};
+  const fileKeys = Object.keys(files);
+  const plan = S.cur?.plan;
+  const projectSummary = S.cur?.projectSummary || '';
+
+  // Build file descriptions (name + first line + size)
+  const fileDescs = fileKeys.map(k => {
+    const content = files[k] || '';
+    const lines = content.split('\n');
+    const firstLine = lines[0]?.trim().slice(0, 80) || '';
+    return `  ${k} (${lines.length} righe) — ${firstLine}`;
+  }).join('\n');
+
+  // Extract recent user messages (last 6)
+  const recentMsgs = S.history.slice(-6).map(m => {
+    const role = m.role === 'user' ? 'UTENTE' : 'AI';
+    const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    return `[${role}]: ${text.slice(0, 300)}`;
+  }).join('\n');
+
+  const sys = `Sei un assistente che sintetizza conversazioni di sviluppo software.
+Genera un RIASSUNTO COMPATTO del progetto e della conversazione, in formato testo strutturato.
+Il riassunto verrà usato come contesto iniziale per una nuova conversazione, quindi deve contenere
+tutte le informazioni necessarie per continuare lo sviluppo senza perdere contesto.
+
+Includi:
+1. TIPO PROGETTO e STACK (framework, linguaggi, librerie)
+2. OBIETTIVO originale dell'utente
+3. STRUTTURA FILE (elenco con breve descrizione di ciascuno)
+4. FUNZIONALITÀ IMPLEMENTATE (cosa fa l'app attualmente)
+5. DECISIONI DI DESIGN prese durante la conversazione
+6. PROBLEMI NOTI o bug segnalati dall'utente
+7. ULTIMA RICHIESTA dell'utente (cosa stava chiedendo di fare)
+
+Scrivi in italiano. Max 800 parole. Sii preciso e specifico, non generico.`;
+
+  const userMsg = `PROGETTO: ${S.cur?.name || 'Senza nome'}
+${projectSummary ? '\n' + projectSummary + '\n' : ''}
+${plan ? 'PIANO: tipo=' + plan.projectType + ', file=' + (plan.fileTree||[]).join(', ') + '\n' : ''}
+FILE DEL PROGETTO:
+${fileDescs}
+
+MESSAGGI RECENTI:
+${recentMsgs}
+
+NUMERO TOTALE MESSAGGI: ${S.history.length}`;
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': S.key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: MODELS.haiku,
+      max_tokens: 1500,
+      temperature: 0.2,
+      system: sys,
+      messages: [{ role: 'user', content: userMsg }]
+    })
+  });
+
+  if (!r.ok) throw new Error('API error ' + r.status);
+  const data = await r.json();
+  return data.content.map(b => b.text || '').join('').trim();
+}
+
+function applyContextTransfer(summary) {
+  if (!S.cur) return;
+
+  // Reset history with summary as first message
+  S.history = [
+    { role: 'assistant', content: `[CONTESTO TRASFERITO]\n\n${summary}\n\n[I file del progetto sono intatti. Continua da dove eravamo.]` }
+  ];
+
+  // Persist
+  S.cur.conv = S.history;
+  save();
+
+  // Clear chat UI and show transfer confirmation
+  const mc = document.getElementById('msgs');
+  if (mc) mc.innerHTML = '';
+
+  renderBbl('ai', '✅ **Contesto trasferito con successo**\n\nHo compresso la conversazione in un riassunto intelligente. I tuoi file sono intatti.\n\n📋 **Riassunto:**\n' + summary.split('\n').slice(0, 8).join('\n') + '\n\n_Puoi continuare a lavorare normalmente._');
+  saveMsg('ai', '✅ Contesto trasferito — conversazione compressa');
+
+  // Update project summary too
+  S.cur.projectSummary = summary;
+  save();
+
+  addLog('plan', '🔄', 'Context Transfer', 'Conversazione compressa — contesto preservato');
+  toast('✅ Contesto trasferito con successo', 'ok');
+}
+
 async function continueNextBatch(btn) {
   const prompt = btn.dataset.prompt;
   const mode = btn.dataset.mode;
