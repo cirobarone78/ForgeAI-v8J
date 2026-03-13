@@ -866,33 +866,45 @@ function buildContextPack(job, plan) {
     return head + '\n/* … (' + (lines.length - headN - tailN) + ' righe omesse) … */\n' + tail;
   }
 
-  const extracts = [];
-  for (const pattern of IMPORTANT) {
-    if (files[pattern]) {
-      extracts.push({ path: pattern, content: files[pattern] });
-    }
-  }
-  // Also include any file that looks like an entry point but wasn't in the list
-  for (const k of keys) {
-    if (extracts.length >= 6) break;
-    if (extracts.find(e => e.path === k)) continue;
-    if (/^(src\/)?(main|index|app)\.(jsx?|tsx?)$/i.test(k) || k === 'app.js') {
-      extracts.push({ path: k, content: files[k] });
-    }
-  }
+  // ── Small project: include FULL content (no truncation) ──
+  const totalChars = keys.reduce((sum, k) => sum + (files[k] || '').length, 0);
+  const isSmallProject = keys.length <= 3 && totalChars < 12000;
 
-  if (extracts.length) {
-    out += '── FILE CHIAVE (estratti) ──\n';
-    let extractBudget = Math.floor(BUDGET * 0.55);
-    for (const ex of extracts) {
-      const snippet = headTail(ex.content, HEAD_LINES, TAIL_LINES);
-      const chunk = `--- ${ex.path} ---\n${snippet}\n\n`;
-      if (out.length + chunk.length > extractBudget + 2000) {
-        // over budget, use smaller extract
-        const small = headTail(ex.content, 15, 8);
-        out += `--- ${ex.path} ---\n${small}\n\n`;
-      } else {
-        out += chunk;
+  if (isSmallProject) {
+    out += '── CODICE COMPLETO DEL PROGETTO ──\n';
+    for (const k of keys) {
+      out += `--- ${k} ---\n${files[k]}\n\n`;
+    }
+  } else {
+    // ── Large project: use head/tail extracts ──
+    const extracts = [];
+    for (const pattern of IMPORTANT) {
+      if (files[pattern]) {
+        extracts.push({ path: pattern, content: files[pattern] });
+      }
+    }
+    // Also include any file that looks like an entry point but wasn't in the list
+    for (const k of keys) {
+      if (extracts.length >= 6) break;
+      if (extracts.find(e => e.path === k)) continue;
+      if (/^(src\/)?(main|index|app)\.(jsx?|tsx?)$/i.test(k) || k === 'app.js') {
+        extracts.push({ path: k, content: files[k] });
+      }
+    }
+
+    if (extracts.length) {
+      out += '── FILE CHIAVE (estratti) ──\n';
+      let extractBudget = Math.floor(BUDGET * 0.55);
+      for (const ex of extracts) {
+        const snippet = headTail(ex.content, HEAD_LINES, TAIL_LINES);
+        const chunk = `--- ${ex.path} ---\n${snippet}\n\n`;
+        if (out.length + chunk.length > extractBudget + 2000) {
+          // over budget, use smaller extract
+          const small = headTail(ex.content, 15, 8);
+          out += `--- ${ex.path} ---\n${small}\n\n`;
+        } else {
+          out += chunk;
+        }
       }
     }
   }
@@ -1062,8 +1074,25 @@ REGOLE ANTI-BUG FUNZIONALI:
 - MAI funzioni con corpo vuoto — implementa logica reale
 - MAI alert() o console.log() come implementazione finale
 
-${isEdit ? `MODIFICA progetto esistente. File attuali: ${fileList}
-Modifica SOLO i file necessari — non rigenerare file non toccati.` : 'Crea da zero un progetto COMPLETO.'}
+${isEdit ? `REGOLA CRITICA — MODIFICA PROGETTO ESISTENTE:
+Stai MODIFICANDO un progetto già funzionante. File attuali: ${fileList}
+- NON creare un progetto nuovo o diverso. NON cambiare tipo di applicazione.
+- Se il progetto è un gioco snake, RESTA un gioco snake. Se è un todo app, RESTA un todo app.
+- Mantieni la stessa struttura, lo stesso stile, la stessa logica base.
+- Applica SOLO le modifiche richieste dall'utente. Non riscrivere tutto da zero.
+- Modifica SOLO i file necessari — non rigenerare file non toccati.
+- Il content di ogni file modificato deve essere il file COMPLETO aggiornato (non una patch).
+${(() => {
+  // Inject full code for small projects directly in system prompt
+  const files = S.cur?.files || {};
+  const fkeys = Object.keys(files);
+  const total = fkeys.reduce((s, k) => s + (files[k] || '').length, 0);
+  if (fkeys.length <= 3 && total < 15000) {
+    return '\nCODICE ATTUALE DEL PROGETTO (modifica QUESTO codice, non crearne uno nuovo):\n' +
+      fkeys.map(k => '--- ' + k + ' ---\n' + files[k]).join('\n\n') + '\n';
+  }
+  return '';
+})()}` : 'Crea da zero un progetto COMPLETO.'}
 ${agentPersona}
 
 REGOLE ANTI-BUG:
@@ -1098,7 +1127,7 @@ REGOLE JSON:
 async function callAPIMultiFile(prompt, mode, qual, isEdit, agent, plan, contextPack) {
   const agentPersona = AGENTS[currentAgent]?.systemExtra || '';
   const sys = buildMultiFileSystemPrompt(mode, qual, isEdit, agentPersona, plan, contextPack || '');
-  const msgs = S.history.slice(-6);
+  const msgs = S.history.slice(isEdit ? -12 : -6);
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
