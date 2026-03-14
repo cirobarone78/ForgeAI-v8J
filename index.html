@@ -616,8 +616,8 @@ function getModelForAgent(agent) {
   const ROUTING = {
     // Planning: Sonnet è sufficiente per architettura
     plan:  MODELS.sonnet,
-    // UI/Frontend: Haiku per pattern CSS/HTML (veloce, economico)
-    ui:    isComplex ? MODELS.sonnet : MODELS.haiku,
+    // UI/Frontend: SEMPRE Sonnet minimo — Haiku produce output troppo scarno
+    ui:    isComplex ? MODELS.opus : MODELS.sonnet,
     // Logic/Backend: Sonnet standard, Opus per logica complessa
     logic: isComplex ? MODELS.opus : MODELS.sonnet,
     // Testing/Review: Sonnet per accuratezza
@@ -922,8 +922,8 @@ async function runAgents(prompt,mode,qual) {
   if (S.model === 'auto') {
     const isComplex = S.cur?.plan?.fileTree?.length > 5 || COMPLEX_KEYWORDS.test(prompt);
     const routeDesc = isComplex
-      ? 'Plan→Sonnet, UI→Sonnet, Logic→Opus, Test→Sonnet'
-      : 'Plan→Sonnet, UI→Haiku, Logic→Sonnet, Test→Sonnet';
+      ? 'Plan→Sonnet, UI→Opus, Logic→Opus, Test→Sonnet'
+      : 'Plan→Sonnet, UI→Sonnet, Logic→Sonnet, Test→Sonnet';
     addLog('plan', '🔀', 'Auto-Route', routeDesc + (isComplex ? ' (progetto complesso)' : ''));
   }
   updateJob(job, { status: 'APPLY' });
@@ -938,6 +938,7 @@ async function runAgents(prompt,mode,qual) {
     if (plan && plan.fileTree && plan.fileTree.length > 0) {
       // ── BATCHED GENERATION (v8j) ──
       addLog('ui','🎨','Generator','Avvio generazione guidata dal piano — ' + plan.fileTree.length + ' file…');
+      renderBbl('ai', '🚀 **Avvio generazione** — ' + plan.fileTree.length + ' file da creare. Segui il progresso qui sotto…');
       await sleep(300);
 
       const batchResult = await runBatchedGeneration(job, plan, prompt, mode, qual);

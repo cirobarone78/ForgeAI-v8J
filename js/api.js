@@ -1538,7 +1538,7 @@ Genera ESATTAMENTE i file elencati nel piano. Segui la struttura indicata.
     ? `\nDIVIETO MONOFILE: Questo progetto è ${plan.projectType}. NON generare un singolo file HTML con tutto dentro. Devi rispettare la struttura multi-file dello scaffold (${fileList}). Ogni file va nel suo path corretto.\n`
     : '';
 
-  return `Sei un expert full-stack developer e UI/UX designer. Genera un PROGETTO MULTI-FILE di qualità professionale.
+  return `Sei un expert full-stack developer e UI/UX designer. Genera un PROGETTO MULTI-FILE di qualità PRODUZIONE.
 
 ${qd[qual]}
 ${planContext}${antiMono}
@@ -1547,12 +1547,28 @@ STRATEGIA SCAFFOLD-FIRST:
 - I batch successivi aggiungono: componenti, pagine, servizi, styling.
 - Per app HTML semplici: genera COMUNQUE file separati (index.html, style.css, app.js) — non un monolite.
 
-REQUISITI:
+REQUISITI DI QUALITÀ MINIMA (NON NEGOZIABILI):
 1. UI/UX professionale con Google Fonts, CSS custom properties, dark mode, animazioni fluide.
 2. Funzionalità COMPLETE — nessun placeholder, nessun TODO, nessun corpo funzione vuoto. Logica reale funzionante.
 3. Responsivo mobile-first con flex/grid layout. Error handling robusto.
 4. Per React/Vite: componenti separati, hooks, state management.
 5. Per Express: routes separate, middleware, dati di esempio realistici.
+
+REQUISITI DIMENSIONE FILE (OBBLIGATORI):
+- index.html: MINIMO 80 righe per app semplici, 150+ per app complesse
+- style.css: MINIMO 120 righe. OGNI pagina deve avere CSS ricco con hover, transitions, shadows
+- app.js: MINIMO 100 righe. OGNI funzione deve essere implementata con logica reale
+- Se è un GIOCO: il file principale DEVE avere 300+ righe. Canvas rendering, game loop, sprite/grafica, input handling, scoring — tutto implementato
+- Se è una DASHBOARD: sidebar navigabile, cards con dati, grafici/statistiche, filtri funzionanti
+- Se è un E-COMMERCE: catalogo prodotti, carrello, checkout flow, animazioni
+
+REGOLA CRITICA — NESSUNA PAGINA BIANCA:
+- Il body DEVE avere un background diverso da bianco (#fff). Usa dark mode o palette colorata.
+- OGNI elemento visibile deve avere styling esplicito: colori, padding, border-radius, shadows.
+- I bottoni DEVONO avere: background colorato, hover state, cursor:pointer, padding, border-radius.
+- Gli input DEVONO avere: border, focus state con glow, padding, border-radius.
+- Le liste/griglie DEVONO avere: gap, card con shadow, hover effect.
+- TESTA MENTALMENTE: se apri la pagina, COSA VEDI? Se la risposta è "sfondo bianco con testo nero" → RISCRIVI TUTTO.
 
 BASELINE GRAFICA OBBLIGATORIA — il tuo CSS DEVE partire da questa struttura (adatta colori/nomi al progetto):
 
@@ -1671,15 +1687,128 @@ async function callAPIMultiFile(prompt, mode, qual, isEdit, agent, plan, context
   const agentPersona = AGENTS[currentAgent]?.systemExtra || '';
   const sys = buildMultiFileSystemPrompt(mode, qual, isEdit, agentPersona, plan, contextPack || '');
   const msgs = S.history.slice(isEdit ? -12 : -6);
+  const model = getModelForAgent(agent);
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-    body: JSON.stringify({ model: getModelForAgent(agent), max_tokens: 32000, temperature: 0.3, system: sys, messages: msgs })
+    body: JSON.stringify({ model, max_tokens: 32000, temperature: 0.5, stream: true, system: sys, messages: msgs })
   });
   if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error?.message || `HTTP ${r.status}`); }
-  const data = await r.json();
-  const raw = data.content.map(b => b.text || '').join('').trim();
+
+  // ── STREAMING: read SSE chunks and show live progress ──
+  const raw = await readStreamWithProgress(r, agent);
   return raw;
+}
+
+// Read SSE stream from Anthropic API with live progress in chat
+async function readStreamWithProgress(response, agent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  let currentFile = null;
+  let fileCount = 0;
+  let charCount = 0;
+  let lastProgressUpdate = 0;
+  const progressEl = createStreamingProgress(agent);
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+
+        try {
+          const evt = JSON.parse(data);
+          if (evt.type === 'content_block_delta' && evt.delta?.text) {
+            const chunk = evt.delta.text;
+            fullText += chunk;
+            charCount += chunk.length;
+
+            // Detect file being generated from JSON output
+            const pathMatch = chunk.match(/"path"\s*:\s*"([^"]+)"/);
+            if (pathMatch && pathMatch[1] !== currentFile) {
+              currentFile = pathMatch[1];
+              fileCount++;
+              updateStreamingProgress(progressEl, {
+                status: 'file',
+                file: currentFile,
+                fileCount,
+                chars: charCount
+              });
+            }
+
+            // Periodic progress update (every ~2000 chars)
+            const now = Date.now();
+            if (now - lastProgressUpdate > 1500) {
+              lastProgressUpdate = now;
+              updateStreamingProgress(progressEl, {
+                status: 'writing',
+                file: currentFile,
+                fileCount,
+                chars: charCount
+              });
+            }
+          } else if (evt.type === 'message_stop') {
+            break;
+          }
+        } catch(e) { /* skip malformed SSE */ }
+      }
+    }
+  } finally {
+    finalizeStreamingProgress(progressEl, fileCount, charCount);
+  }
+
+  return fullText.trim();
+}
+
+// Create the streaming progress element in chat
+function createStreamingProgress(agent) {
+  const mc = document.getElementById('msgs');
+  if (!mc) return null;
+  const el = document.createElement('div');
+  el.className = 'stream-progress';
+  el.innerHTML = `<div class="sp-dot"></div><div class="sp-body"><div class="sp-status">Generazione avviata…</div><div class="sp-detail"></div></div>`;
+  mc.appendChild(el);
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  return el;
+}
+
+// Update streaming progress with current status
+function updateStreamingProgress(el, info) {
+  if (!el) return;
+  const statusEl = el.querySelector('.sp-status');
+  const detailEl = el.querySelector('.sp-detail');
+  if (!statusEl) return;
+
+  const kb = (info.chars / 1024).toFixed(1);
+  if (info.status === 'file') {
+    statusEl.textContent = `Scrivo ${info.file}…`;
+    detailEl.textContent = `${info.fileCount} file · ${kb}kb generati`;
+  } else {
+    statusEl.textContent = info.file ? `Scrivo ${info.file}…` : 'Genero codice…';
+    detailEl.textContent = `${info.fileCount || 0} file · ${kb}kb generati`;
+  }
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// Finalize streaming progress
+function finalizeStreamingProgress(el, fileCount, charCount) {
+  if (!el) return;
+  const kb = (charCount / 1024).toFixed(1);
+  el.querySelector('.sp-status').textContent = `Generazione completata`;
+  el.querySelector('.sp-detail').textContent = `${fileCount} file · ${kb}kb totali`;
+  el.querySelector('.sp-dot')?.classList.add('done');
+  // Auto-fade after 3 seconds
+  setTimeout(() => { el.style.opacity = '0.4'; }, 3000);
 }
 
 
@@ -1967,23 +2096,22 @@ REGOLA ASSOLUTA: solo codice Python puro, zero markdown, zero backtick, zero spi
     fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model: getModelForAgent('ui'), max_tokens:32000, temperature:0.3, system:sysFE, messages:[...msgs,{role:'user',content:prompt+' — genera il FRONTEND HTML completo e professionale'}]})
+      body:JSON.stringify({model: getModelForAgent('ui'), max_tokens:32000, temperature:0.5, stream:true, system:sysFE, messages:[...msgs,{role:'user',content:prompt+' — genera il FRONTEND HTML completo e professionale'}]})
     }),
     fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model: getModelForAgent('logic'), max_tokens:16000, temperature:0.3, system:sysBE, messages:[...msgs,{role:'user',content:prompt+' — genera il BACKEND Python Flask completo'}]})
+      body:JSON.stringify({model: getModelForAgent('logic'), max_tokens:16000, temperature:0.4, stream:true, system:sysBE, messages:[...msgs,{role:'user',content:prompt+' — genera il BACKEND Python Flask completo'}]})
     })
   ]);
 
   if (!feRes.ok) { const e=await feRes.json().catch(()=>({})); throw new Error(e.error?.message||'Errore frontend'); }
   if (!beRes.ok) { const e=await beRes.json().catch(()=>({})); throw new Error(e.error?.message||'Errore backend'); }
 
-  const feData = await feRes.json();
-  const beData = await beRes.json();
-
-  const feCode = feData.content.map(b=>b.text||'').join('').trim().replace(/^```[\w]*\n?/m,'').replace(/\n?```\s*$/m,'').trim();
-  const beCode = beData.content.map(b=>b.text||'').join('').trim().replace(/^```[\w]*\n?/m,'').replace(/\n?```\s*$/m,'').trim();
+  const [feCode, beCode] = await Promise.all([
+    readStreamWithProgress(feRes, 'ui').then(r => r.replace(/^```[\w]*\n?/m,'').replace(/\n?```\s*$/m,'').trim()),
+    readStreamWithProgress(beRes, 'logic').then(r => r.replace(/^```[\w]*\n?/m,'').replace(/\n?```\s*$/m,'').trim())
+  ]);
 
   return { frontend: feCode, backend: beCode };
 }
@@ -2029,8 +2157,8 @@ REGOLE ANTI-BUG (SEGUI SEMPRE):
 REGOLA ASSOLUTA: SOLO codice puro. Zero markdown, zero backtick, zero spiegazioni, zero testo prima o dopo il codice.
 Per HTML: file completo <!DOCTYPE html> con TUTTO inline (CSS in <style>, JS in <script>). Includi meta viewport e font imports.${ex}`;
   const msgs=S.history.slice(-6);  // last entry already contains multipart content from buildContent
-  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:getModelForAgent(agent),max_tokens:32000,temperature:0.3,system:sys,messages:msgs})});
+  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:getModelForAgent(agent),max_tokens:32000,temperature:0.5,stream:true,system:sys,messages:msgs})});
   if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
-  const data=await r.json();
-  return data.content.map(b=>b.text||'').join('').trim().replace(/^```[\w]*\n?/m,'').replace(/\n?```\s*$/m,'').trim();
+  const raw = await readStreamWithProgress(r, agent);
+  return raw.replace(/^```[\w]*\n?/m,'').replace(/\n?```\s*$/m,'').trim();
 }

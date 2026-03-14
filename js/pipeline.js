@@ -150,13 +150,12 @@ REGOLA ASSOLUTA: SOLO codice puro. Zero spiegazioni, zero markdown, zero backtic
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
     body: JSON.stringify({
-      model: getModelForAgent('test'), max_tokens: 32000, temperature: 0.3, system: reviewSys,
+      model: getModelForAgent('test'), max_tokens: 32000, temperature: 0.3, stream: true, system: reviewSys,
       messages: [{ role: 'user', content: reviewMsg }]
     })
   });
   if (!r.ok) throw new Error('Review failed');
-  const data = await r.json();
-  const reviewed = data.content.map(b => b.text || '').join('').trim().replace(/^```[\w]*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+  const reviewed = (await readStreamWithProgress(r, 'test')).replace(/^```[\w]*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
   return (reviewed.length > code.length * 0.5 && (reviewed.includes('<') || reviewed.includes('def ') || reviewed.includes('function '))) ? reviewed : code;
 }
 
@@ -314,11 +313,11 @@ function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
   const allMarkup = fileKeys.filter(f => /\.(html|jsx|tsx|vue)$/.test(f)).map(f => files[f] || '').join('\n');
   const markupLines = allMarkup.split('\n').length;
 
-  // 1. CSS quantity baseline — STRICTER: min 50 lines for complex, 30 for simple
-  const minCss = isComplexRequest(prompt) ? 50 : 30;
-  if (cssLines < minCss && markupLines > 40) {
+  // 1. CSS quantity baseline — min 100 lines for complex, 60 for simple
+  const minCss = isComplexRequest(prompt) ? 100 : 60;
+  if (cssLines < minCss && markupLines > 30) {
     issues.push({ severity: 'high', type: 'UI_TOO_BASIC',
-      message: 'Solo ' + cssLines + ' righe CSS per ' + markupLines + ' righe di markup (minimo ' + minCss + ' per questa complessità). UI troppo basilare.' });
+      message: 'Solo ' + cssLines + ' righe CSS per ' + markupLines + ' righe di markup (minimo ' + minCss + '). UI troppo basilare — serve dark theme, card shadows, hover states, transitions.' });
   }
 
   // 2. Background check — no raw white default — PROMOTED TO HIGH
@@ -402,16 +401,23 @@ function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
       message: reallyUncovered.length + ' classi HTML senza styling CSS: ' + reallyUncovered.slice(0, 5).map(c => '.' + c).join(', ') });
   }
 
-  // 10. NEW: Main file size check — complex apps need substantial main files
-  if (isComplexRequest(prompt)) {
-    const mainFiles = fileKeys.filter(f => /^(index\.html|src\/App\.(jsx|tsx)|app\/page\.(jsx|tsx))$/.test(f));
-    for (const mf of mainFiles) {
-      const lines = (files[mf] || '').split('\n').length;
-      if (lines < 50) {
-        issues.push({ severity: 'high', type: 'SKELETON_UI',
-          message: 'File principale "' + mf + '" ha solo ' + lines + ' righe — troppo corto per app complessa (minimo 50).' });
-      }
+  // 10. Main file size check — ALL projects need substantial files
+  const mainFiles = fileKeys.filter(f => /^(index\.html|src\/App\.(jsx|tsx)|app\/page\.(jsx|tsx))$/.test(f));
+  const minMainLines = isComplexRequest(prompt) ? 100 : 60;
+  for (const mf of mainFiles) {
+    const lines = (files[mf] || '').split('\n').length;
+    if (lines < minMainLines) {
+      issues.push({ severity: 'high', type: 'SKELETON_UI',
+        message: 'File "' + mf + '" ha solo ' + lines + ' righe (minimo ' + minMainLines + '). App scheletrica — servono contenuti reali, struttura UI completa, interattività.' });
     }
+  }
+
+  // 11. Total project size check — catch tiny projects that slip through
+  const totalLines = fileKeys.reduce((sum, f) => sum + (files[f] || '').split('\n').length, 0);
+  const minTotal = isComplexRequest(prompt) ? 250 : 120;
+  if (totalLines < minTotal && fileKeys.length >= 2) {
+    issues.push({ severity: 'high', type: 'SKELETON_UI',
+      message: 'Progetto troppo piccolo: solo ' + totalLines + ' righe totali su ' + fileKeys.length + ' file (minimo ' + minTotal + '). Servono contenuti completi.' });
   }
 
   return issues;
@@ -555,14 +561,14 @@ async function runQualityFixPass(job, plan, prompt, mode, qual, qReport) {
       .filter(f => files[f]).forEach(f => issueFiles.add(f));
   }
 
-  // Gather targeted file contents (budget ~24k chars — increased for quality fixes)
+  // Gather targeted file contents (budget ~40k chars — need full context for accurate fixes)
   let fileContext = '';
-  const BUDGET = 24000;
+  const BUDGET = 40000;
   const priorityOrder = [...issueFiles, ...fileKeys.filter(f => !issueFiles.has(f))];
   for (const f of priorityOrder) {
     if (!files[f]) continue;
     const content = files[f];
-    const maxSlice = issueFiles.has(f) ? 6000 : 2000; // More context for problematic files
+    const maxSlice = issueFiles.has(f) ? 12000 : 3000; // Full context for problematic files
     const add = '── ' + f + (issueFiles.has(f) ? ' [NEEDS FIX]' : '') + ' ──\n' + content.slice(0, maxSlice) + (content.length > maxSlice ? '\n/* … troncato … */' : '') + '\n\n';
     if (fileContext.length + add.length > BUDGET) break;
     fileContext += add;
@@ -589,8 +595,10 @@ CORREZIONE UI OBBLIGATORIA — il progetto ha styling insufficiente. Devi:
 - Transizioni smooth (0.2-0.3s ease)
 - Media query per mobile (max-width: 768px)
 - Se è dashboard/app: sidebar con bg scuro, main con bg leggermente diverso, stat cards visive
+- Se è un GIOCO: canvas/area di gioco con sfondo tematico, sprite/grafica colorata, HUD con score, effetti particellari, animazioni
 - OGNI classe CSS usata nell'HTML DEVE avere uno stile definito nel CSS. Zero classi orfane.
-- File principali (index.html, App.jsx) devono avere almeno 50+ righe per app complesse` : '';
+- File principali (index.html, App.jsx) devono avere almeno 100+ righe per app complesse
+- IL CSS DEVE AVERE ALMENO 100 RIGHE per app complesse, 60 per semplici` : '';
 
   const funcFixBlock = hasFuncIssues ? `
 CORREZIONE FUNZIONALE OBBLIGATORIA — ci sono bug strutturali. Devi:
@@ -633,13 +641,12 @@ ISTRUZIONI: Correggi TUTTI i problemi CRITICI. Per i problemi UI, aggiungi styli
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
-        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.3, system: fixSys,
+        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.5, stream: true, system: fixSys,
         messages: [{ role: 'user', content: fixMsg }]
       })
     });
     if (!r.ok) throw new Error('Quality fix API error: ' + r.status);
-    const data = await r.json();
-    const raw = data.content.map(b => b.text || '').join('').trim();
+    const raw = await readStreamWithProgress(r, 'fix');
 
     const parsed = parseAIResponse(raw, mode);
     if (parsed.type === 'json' && parsed.data.filesChanged && parsed.data.filesChanged.length > 0) {
@@ -659,7 +666,7 @@ ISTRUZIONI: Correggi TUTTI i problemi CRITICI. Per i problemi UI, aggiungi styli
 }
 
 // ── QUALITY GATE ORCHESTRATOR (v2: retry + incomplete status) ──
-const QG_MAX_RETRIES = 2;
+const QG_MAX_RETRIES = 4;
 
 async function runProjectQualityGate(job, plan, prompt, mode, qual) {
   if (!S.currentJob || S.currentJob.id !== job.id) return;
