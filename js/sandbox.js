@@ -96,6 +96,11 @@ async function runSandbox() {
     }
 
     wcLog('✓ WebContainers caricato', 'ok');
+
+    // Teardown old instance if any (prevents "Unable to create more instances")
+    if (S.wcServerProcess) { try { S.wcServerProcess.kill(); } catch(e){} S.wcServerProcess = null; }
+    if (wcInstance) { try { await wcInstance.teardown(); } catch(e){} wcInstance = null; S.lastDepsHash = null; }
+
     wcLog('> Avvio container…', 'cmd');
     wcInstance = await window.WebContainer.boot();
     wcLog('✓ Container avviato', 'ok');
@@ -242,9 +247,17 @@ async function runSandboxForJob(job, mode, qual) {
       });
     }
 
-    // Boot
+    // Boot (with retry if instance limit reached)
     wcLog('> Avvio container…', 'cmd');
-    wcInstance = await window.WebContainer.boot();
+    try {
+      wcInstance = await window.WebContainer.boot();
+    } catch(bootErr) {
+      // If "Unable to create more instances", force teardown and retry once
+      wcLog('⚠ Boot fallito: ' + bootErr.message + ' — riprovo…', 'info');
+      if (wcInstance) { try { await wcInstance.teardown(); } catch(e){} wcInstance = null; }
+      S.lastDepsHash = null;
+      wcInstance = await window.WebContainer.boot();
+    }
 
     // Mount files
     const files = {};
