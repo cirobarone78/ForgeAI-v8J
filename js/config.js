@@ -72,9 +72,9 @@ const PLAN_MINIMUMS = {
 // Keywords that signal complex structure
 const COMPLEX_KEYWORDS = /dashboard|sidebar|login|auth|register|crud|admin|kanban|drag.?drop|storage|database|api|router|navigation|tabs?|modal|chart|calendar|settings|profile|todo|chat|notifications?|search|filter/i;
 
-// Batched generation limits
-const MAX_BATCHES = 12;
-const FILES_PER_BATCH = 2;
+// Iterative generation: 1 file at a time for full cross-file coherence
+const MAX_BATCHES = 15;
+const FILES_PER_BATCH = 1;
 
 // Job pipeline
 const JOB_MAX_FIX = 3;

@@ -7,6 +7,7 @@
 <title>Forge — AI App Builder</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </head>
 <body>
 
@@ -963,6 +964,17 @@ async function runAgents(prompt,mode,qual) {
 
         if (S.currentJob?.id !== job.id) return; // cancelled during QG
 
+        // ── VISUAL REVIEW (Preview-in-the-loop) ──
+        if (!isNodeProject()) {
+          try {
+            await runVisualReview(job, plan, prompt, mode, qual);
+          } catch(vrErr) {
+            console.warn('Visual review error:', vrErr.message);
+            addLog('test', '⚠️', 'Visual Review', 'Errore: ' + vrErr.message);
+          }
+          if (S.currentJob?.id !== job.id) return; // cancelled during visual review
+        }
+
         // Final sandbox verification if Node project
         if (isNodeProject() && job.status !== 'DONE') {
           addLog('test','🚀','Final Verify','Verifica finale sandbox…');
@@ -1071,6 +1083,17 @@ async function runAgents(prompt,mode,qual) {
       }
 
       if (S.currentJob?.id !== job.id) return; // cancelled during QG
+
+      // ── VISUAL REVIEW (single-shot path) ──
+      if (!isNodeProject()) {
+        try {
+          await runVisualReview(job, plan, prompt, mode, qual);
+        } catch(vrErr) {
+          console.warn('Visual review error:', vrErr.message);
+          addLog('test', '⚠️', 'Visual Review', 'Errore: ' + vrErr.message);
+        }
+        if (S.currentJob?.id !== job.id) return;
+      }
 
       if (isNodeProject()) {
         updateJob(job, { status: 'RUN' });

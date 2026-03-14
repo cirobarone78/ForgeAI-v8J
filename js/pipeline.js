@@ -777,4 +777,331 @@ async function autoFixLoop(job, mode, qual) {
   }
 }
 
+// ══════════════════════════════════
+// VISUAL REVIEW (Preview-in-the-loop)
+// ══════════════════════════════════
+// Renders the generated HTML in a hidden iframe, screenshots it,
+// sends the screenshot to Claude Vision asking "is this acceptable?",
+// and triggers a fix pass if not.
+
+const VISUAL_REVIEW_MAX_RETRIES = 2;
+
+async function runVisualReview(job, plan, prompt, mode, qual) {
+  if (!S.cur?.files) return;
+
+  // Only run for static HTML projects (srcdoc-previewable)
+  const htmlFile = S.cur.files['index.html'] || S.cur.files['public/index.html'];
+  if (!htmlFile) {
+    addLog('test', '⏭', 'Visual Review', 'Skip — nessun file HTML per preview.');
+    return;
+  }
+
+  // Check if html2canvas is loaded
+  if (typeof html2canvas === 'undefined') {
+    addLog('test', '⏭', 'Visual Review', 'Skip — html2canvas non caricato.');
+    return;
+  }
+
+  addLog('test', '📸', 'Visual Review', 'Renderizzo preview e catturo screenshot…');
+  renderBbl('ai', '📸 **Visual Review** — Renderizzo la tua app per verificare il risultato visivo…');
+
+  for (let attempt = 1; attempt <= VISUAL_REVIEW_MAX_RETRIES; attempt++) {
+    try {
+      // 1. Assemble full HTML (inline CSS + JS from separate files)
+      const fullHtml = assembleFullHtml();
+
+      // 2. Render in hidden iframe and screenshot
+      const screenshotBase64 = await capturePreviewScreenshot(fullHtml);
+      if (!screenshotBase64) {
+        addLog('test', '⚠️', 'Visual Review', 'Screenshot fallito — skip review visivo.');
+        return;
+      }
+
+      addLog('test', '🔍', 'Visual Review', 'Screenshot catturato — invio a Claude per analisi visiva (tentativo ' + attempt + '/' + VISUAL_REVIEW_MAX_RETRIES + ')…');
+
+      // 3. Send screenshot to Claude Vision API
+      const review = await callVisualReviewAPI(screenshotBase64, prompt, attempt);
+
+      if (!review) {
+        addLog('test', '⚠️', 'Visual Review', 'Analisi visiva fallita — skip.');
+        return;
+      }
+
+      // 4. Parse review verdict
+      if (review.passed) {
+        addLog('test', '✅', 'Visual Review', 'VISUAL_REVIEW passed: ' + (review.summary || 'App visivamente accettabile'));
+        renderBbl('ai', '✅ **Visual Review superato** — ' + (review.summary || 'L\'app appare professionale e funzionale.'));
+        return;
+      }
+
+      // 5. Not passed — trigger visual fix
+      addLog('test', '🔴', 'Visual Review', 'VISUAL_REVIEW failed: ' + (review.summary || 'Problemi visivi rilevati'));
+      renderBbl('ai', '🔍 **Visual Review**: problemi visivi rilevati. Correzione automatica (' + attempt + '/' + VISUAL_REVIEW_MAX_RETRIES + ')…\n\n' +
+        (review.issues || []).map(i => '- ' + i).join('\n'));
+
+      // 6. Run visual fix pass
+      const fixed = await runVisualFixPass(job, plan, prompt, mode, qual, review);
+      if (!fixed) {
+        addLog('test', '⚠️', 'Visual Review', 'Fix visivo non ha prodotto risultati.');
+        if (attempt === VISUAL_REVIEW_MAX_RETRIES) break;
+        continue;
+      }
+
+      // Loop back to re-screenshot and re-check
+      addLog('test', '🔄', 'Visual Review', 'Fix applicato — ri-verifico screenshot…');
+
+    } catch(err) {
+      console.warn('Visual review error:', err);
+      addLog('test', '⚠️', 'Visual Review', 'Errore: ' + err.message);
+      return;
+    }
+  }
+}
+
+// Assemble separate CSS/JS files into a single HTML for preview
+function assembleFullHtml() {
+  const files = S.cur?.files || {};
+  let html = files['index.html'] || files['public/index.html'] || '';
+
+  // If style.css exists and is linked but separate, inline it
+  if (files['style.css'] && html.includes('style.css')) {
+    html = html.replace(
+      /<link[^>]*href=["']style\.css["'][^>]*>/i,
+      '<style>\n' + files['style.css'] + '\n</style>'
+    );
+  }
+  if (files['styles.css'] && html.includes('styles.css')) {
+    html = html.replace(
+      /<link[^>]*href=["']styles\.css["'][^>]*>/i,
+      '<style>\n' + files['styles.css'] + '\n</style>'
+    );
+  }
+
+  // If app.js exists and is linked but separate, inline it
+  if (files['app.js'] && html.includes('app.js')) {
+    html = html.replace(
+      /<script[^>]*src=["']app\.js["'][^>]*><\/script>/i,
+      '<script>\n' + files['app.js'] + '\n</script>'
+    );
+  }
+  if (files['script.js'] && html.includes('script.js')) {
+    html = html.replace(
+      /<script[^>]*src=["']script\.js["'][^>]*><\/script>/i,
+      '<script>\n' + files['script.js'] + '\n</script>'
+    );
+  }
+
+  return html;
+}
+
+// Render HTML in hidden iframe and capture screenshot via html2canvas
+async function capturePreviewScreenshot(html) {
+  return new Promise((resolve) => {
+    // Create hidden iframe
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1280px;height:800px;border:none;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+
+    iframe.onload = async () => {
+      try {
+        // Wait for rendering + fonts + images to load
+        await new Promise(r => setTimeout(r, 1500));
+
+        const doc = iframe.contentDocument;
+        if (!doc || !doc.body) {
+          document.body.removeChild(iframe);
+          resolve(null);
+          return;
+        }
+
+        // Use html2canvas on the iframe's body
+        const canvas = await html2canvas(doc.body, {
+          width: 1280,
+          height: 800,
+          scale: 1,
+          useCORS: true,
+          allowTaint: true,
+          backgroundColor: null,
+          logging: false
+        });
+
+        const base64 = canvas.toDataURL('image/png').split(',')[1];
+        document.body.removeChild(iframe);
+        resolve(base64);
+      } catch(err) {
+        console.warn('html2canvas error:', err);
+        document.body.removeChild(iframe);
+        resolve(null);
+      }
+    };
+
+    iframe.onerror = () => {
+      document.body.removeChild(iframe);
+      resolve(null);
+    };
+
+    // Write HTML to iframe
+    iframe.srcdoc = html;
+  });
+}
+
+// Call Claude Vision API with screenshot for visual review
+async function callVisualReviewAPI(screenshotBase64, userPrompt, attempt) {
+  const reviewSys = `Sei un SENIOR UI/UX REVIEWER. Ti viene mostrato lo screenshot di un'app web generata da AI.
+
+RICHIESTA ORIGINALE DELL'UTENTE: "${userPrompt}"
+
+Il tuo compito è valutare se l'app è VISIVAMENTE ACCETTABILE come prodotto finito.
+
+CRITERI DI VALUTAZIONE (tutti devono essere soddisfatti):
+1. L'app NON è una pagina bianca o quasi vuota
+2. I colori sono coerenti e il background NON è bianco grezzo (#fff)
+3. I bottoni e gli input sono visivamente stilizzati (non grigi di default del browser)
+4. C'è una struttura visiva chiara (header, sidebar, cards, sezioni)
+5. Il testo è leggibile e ha gerarchia tipografica
+6. L'app sembra funzionale — gli elementi interattivi sono visibili e distinguibili
+7. Il layout non è rotto — gli elementi non si sovrappongono in modo errato
+8. L'app corrisponde a ciò che l'utente ha chiesto (se ha chiesto un gioco, si vede un gioco)
+
+RISPONDI SOLO con JSON valido:
+{
+  "passed": true/false,
+  "score": 1-10,
+  "summary": "breve descrizione di cosa vedi",
+  "issues": ["problema 1", "problema 2"],
+  "fixes": ["suggerimento fix 1", "suggerimento fix 2"]
+}
+
+Se lo score è >= 6, metti passed=true. Altrimenti passed=false.
+Sii SEVERO — un'app con bottoni grigi default, sfondo bianco, o layout rotto è score 1-3.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': S.key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: getModelForAgent('test'),
+        max_tokens: 1500,
+        temperature: 0.2,
+        system: reviewSys,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: screenshotBase64
+              }
+            },
+            {
+              type: 'text',
+              text: 'Analizza questo screenshot. L\'utente ha chiesto: "' + userPrompt.slice(0, 200) + '". Valuta se il risultato è visivamente accettabile.'
+            }
+          ]
+        }]
+      })
+    });
+
+    if (!r.ok) {
+      console.warn('Visual review API error:', r.status);
+      return null;
+    }
+
+    const data = await r.json();
+    const raw = data.content.map(b => b.text || '').join('').trim();
+
+    // Parse JSON response
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    return JSON.parse(jsonMatch[0]);
+
+  } catch(err) {
+    console.warn('Visual review API error:', err);
+    return null;
+  }
+}
+
+// Run a visual fix pass based on the visual review feedback
+async function runVisualFixPass(job, plan, prompt, mode, qual, review) {
+  const files = S.cur?.files || {};
+  const fileKeys = Object.keys(files);
+
+  // Gather file contents (focus on HTML + CSS + main JS)
+  let fileContext = '';
+  const BUDGET = 40000;
+  const uiFiles = fileKeys.filter(f => /\.(html|css|jsx|tsx)$/.test(f) || f === 'app.js' || f === 'script.js');
+  const otherFiles = fileKeys.filter(f => !uiFiles.includes(f));
+
+  for (const f of [...uiFiles, ...otherFiles]) {
+    if (!files[f]) continue;
+    const add = '── ' + f + ' ──\n' + files[f] + '\n\n';
+    if (fileContext.length + add.length > BUDGET) break;
+    fileContext += add;
+  }
+
+  const fixSys = `Sei un SENIOR UI/UX DEVELOPER. Il progetto ha FALLITO la visual review (screenshot verificato da AI).
+
+PROBLEMI VISIVI RILEVATI:
+${(review.issues || []).map((i, n) => (n + 1) + '. ' + i).join('\n')}
+
+SUGGERIMENTI DI FIX:
+${(review.fixes || []).map((f, n) => (n + 1) + '. ' + f).join('\n')}
+
+PUNTEGGIO VISIVO: ${review.score}/10 — ${review.summary}
+
+MISSIONE: rendi l'app VISIVAMENTE PROFESSIONALE. Devi:
+- Fixare TUTTI i problemi visivi elencati sopra
+- Usare dark theme (--bg: #0f172a, --surface: #1e293b) o palette colorata coerente
+- Aggiungere Google Fonts, shadows, border-radius, hover states, transitions
+- Se è un gioco: canvas/area di gioco con grafica colorata e tematica, non vuota
+- Se ha bottoni: background colorato, hover effect, padding, border-radius
+- Se ha form/input: bordo, focus glow, placeholder styled
+- Layout strutturato: header/sidebar + main content con spacing consistente
+
+FORMATO OUTPUT — SOLO JSON:
+{"summary":"cosa hai fixato","filesChanged":[{"path":"file","action":"update","content":"CONTENUTO COMPLETO"}]}`;
+
+  const fixMsg = `RICHIESTA UTENTE: "${prompt}"
+SCORE VISIVO: ${review.score}/10
+
+FILE DEL PROGETTO:
+${fileContext}
+
+Correggi TUTTI i problemi visivi. Restituisci i file COMPLETI corretti.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({
+        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.5, stream: true, system: fixSys,
+        messages: [{ role: 'user', content: fixMsg }]
+      })
+    });
+    if (!r.ok) throw new Error('Visual fix API error: ' + r.status);
+    const raw = await readStreamWithProgress(r, 'fix');
+
+    const parsed = parseAIResponse(raw, mode);
+    if (parsed.type === 'json' && parsed.data.filesChanged && parsed.data.filesChanged.length > 0) {
+      saveSnapshot('Pre-visual-fix', job.id);
+      const result = applyJsonPatch(parsed, prompt);
+      saveSnapshot('Post-visual-fix', job.id);
+      addLog('test', '✅', 'Visual Fix', result.changedFiles.length + ' file corretti: ' + result.changedFiles.join(', '));
+      renderBbl('ai', '🎨 **Visual Fix applicato** — ' + result.changedFiles.length + ' file corretti (' + result.totalLines + ' righe)');
+      return true;
+    }
+    return false;
+  } catch(err) {
+    addLog('test', '⚠️', 'Visual Fix', 'Errore: ' + err.message);
+    return false;
+  }
+}
+
 

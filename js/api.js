@@ -975,30 +975,72 @@ function buildBatchPrompt(userGoal, plan, targetFiles, batchNum, totalBatches, c
   const existingFileList = Object.keys(S.cur?.files || {}).join(', ');
   const milestone = getMilestoneForFile(plan, targetFiles[0]);
   const summary = S.cur?.projectSummary || '';
+  const targetFile = targetFiles[0]; // Single file in iterative mode
 
-  // Determine if any target files are CSS/style related
-  const hasStyleFiles = targetFiles.some(f => /\.css$|style/i.test(f));
-  const styleReminder = hasStyleFiles
-    ? `\nSTILE OBBLIGATORIO: CSS vars (--primary, --bg, --surface, --text), sfondo scuro (MAI #fff), Google Fonts Inter, border-radius 12px, box-shadow, hover/focus states, flex/grid layout, @media (max-width:768px). Vedi la baseline CSS nel system prompt.\n`
-    : `\nRICORDA: usa le CSS classes e gli ID già definiti nel progetto (vedi interface contract). Ogni handler JS deve corrispondere a un elemento reale.\n`;
+  // Determine file type for specific instructions
+  const isCSS = /\.css$/.test(targetFile);
+  const isHTML = /\.html$/.test(targetFile);
+  const isJS = /\.(js|jsx|tsx|ts)$/.test(targetFile);
 
-  const batchLayer = getFileLayer(targetFiles[0]);
+  let fileSpecificInstructions = '';
+  if (isCSS) {
+    fileSpecificInstructions = `
+ISTRUZIONI SPECIFICHE PER ${targetFile}:
+- MINIMO 120 righe di CSS per questo file
+- CSS custom properties obbligatorie: --primary, --bg, --surface, --text, --border, --radius, --shadow
+- Background SCURO: --bg: #0f172a o simile (MAI bianco #fff)
+- Google Fonts: @import o <link> per Inter/Poppins/Outfit
+- OGNI classe usata nell'HTML DEVE avere uno stile qui
+- Tutti i bottoni: background colorato, hover con transform, cursor:pointer, padding 0.6rem+, border-radius 8px+
+- Tutti gli input: border, focus ring con box-shadow, padding, border-radius
+- Cards: background surface, border-radius 12-16px, box-shadow, hover state
+- Transizioni: transition: all 0.2s ease su elementi interattivi
+- Media query: @media (max-width: 768px) con layout responsive
+- Animazioni: almeno 2 @keyframes (fadeIn, slideIn, o specifiche per il progetto)`;
+  } else if (isHTML) {
+    fileSpecificInstructions = `
+ISTRUZIONI SPECIFICHE PER ${targetFile}:
+- MINIMO 80 righe di HTML (150+ se app complessa)
+- Struttura semantica: header/nav, main, aside (se sidebar), footer
+- Includi Google Fonts via <link>
+- Collega correttamente CSS e JS esterni
+- Ogni bottone deve avere onclick o event listener
+- Ogni elemento interattivo deve avere un id o classe
+- Contenuti REALI — non "Lorem ipsum" ma dati tematici coerenti con la richiesta`;
+  } else if (isJS) {
+    fileSpecificInstructions = `
+ISTRUZIONI SPECIFICHE PER ${targetFile}:
+- MINIMO 100 righe di JavaScript
+- OGNI funzione referenziata nell'HTML (onclick, addEventListener) DEVE essere definita QUI
+- Logica REALE e COMPLETA — nessun TODO, nessun corpo vuoto, nessun alert() come implementazione
+- Se è un gioco: game loop con requestAnimationFrame, input handling, collision detection, scoring — TUTTO funzionante
+- Se è un'app: CRUD completo, state management, rendering dinamico, error handling
+- DOMContentLoaded o defer per accesso sicuro al DOM
+- Gestisci edge cases: array vuoti, null, divisione per zero`;
+  }
+
+  const batchLayer = getFileLayer(targetFile);
   const layerLabel = {layout:'LAYOUT (struttura + design)', logic:'LOGICA (funzionalità + interazioni)', integration:'INTEGRAZIONE (config + utility)'}[batchLayer] || 'GENERAZIONE';
 
   return `${userGoal}
 
-CONTESTO: Stai generando file per un progetto esistente.
-Batch ${batchNum}/${totalBatches} — Fase: ${layerLabel}. File già nel progetto: ${existingFileList}
+CONTESTO: Stai generando UN FILE per un progetto esistente. Hai accesso al CODICE COMPLETO di tutti i file già creati.
+Step ${batchNum}/${totalBatches} — Fase: ${layerLabel}. File già nel progetto: ${existingFileList}
 ${summary ? '\n' + summary + '\n' : ''}${contextPack ? '\n' + contextPack + '\n' : ''}
-IN QUESTO BATCH genera SOLO questi file (${targetFiles.length}):
-${targetFiles.map(f => '- ' + f).join('\n')}
-
+GENERA SOLO questo file:
+- ${targetFile}
+${fileSpecificInstructions}
 ${milestone ? 'Milestone: "' + milestone.name + '"' : ''}
 ${plan.notes ? 'Note progetto: ' + plan.notes.join('; ') : ''}
-${styleReminder}
-I file devono essere COMPLETI e FUNZIONANTI, integrandosi con i file già esistenti nel progetto.
-Non rigenerare file già creati — genera SOLO quelli elencati sopra.
-Ogni funzione deve avere un corpo reale. Nessun TODO, placeholder, o corpo vuoto.`;
+
+REGOLA CRITICA DI COERENZA:
+- Leggi ATTENTAMENTE il codice dei file già generati (sopra)
+- Usa ESATTAMENTE le stesse classi CSS, ID, nomi di funzione che sono già definiti
+- Se generi CSS: definisci TUTTE le classi usate nell'HTML esistente
+- Se generi JS: implementa TUTTE le funzioni chiamate nell'HTML esistente
+- Se generi HTML: usa le classi CSS e chiama le funzioni JS che esistono/esisteranno
+
+Il file deve essere COMPLETO e FUNZIONANTE. Nessun TODO, placeholder, o corpo vuoto.`;
 }
 
 // Classify a file into a responsibility layer
@@ -1219,7 +1261,9 @@ function buildContextPack(job, plan) {
   const keys = Object.keys(files).sort();
   if (keys.length === 0) return '';
 
-  const BUDGET = 16000; // soft char limit
+  // v9: FULL CONTEXT — include complete file contents for cross-file coherence
+  // Budget raised to 60k to support iterative file-by-file generation
+  const BUDGET = 60000;
   let out = '';
 
   // ── 0. Interface contract (cross-file coherence) ──
@@ -1232,85 +1276,42 @@ function buildContextPack(job, plan) {
     return `  ${f}  (${lines} righe)`;
   }).join('\n') + '\n\n';
 
-  // ── 2. Key-file extracts (head + tail) ──
-  const IMPORTANT = [
-    'package.json',
-    'server.js', 'index.js',
-    'src/App.jsx', 'src/App.tsx', 'app/page.jsx', 'app/page.tsx',
-    'index.html', 'public/index.html',
-    'vite.config.js', 'vite.config.ts',
-    'style.css', 'src/index.css'
-  ];
-  const HEAD_LINES = 40;
-  const TAIL_LINES = 20;
+  // ── 2. FULL file contents — iterative generation needs complete context ──
+  const totalChars = keys.reduce((sum, k) => sum + (files[k] || '').length, 0);
 
   function headTail(content, headN, tailN) {
     const lines = content.split('\n');
-    if (lines.length <= headN + tailN + 5) return content; // small enough, include all
+    if (lines.length <= headN + tailN + 5) return content;
     const head = lines.slice(0, headN).join('\n');
     const tail = lines.slice(-tailN).join('\n');
     return head + '\n/* … (' + (lines.length - headN - tailN) + ' righe omesse) … */\n' + tail;
   }
 
-  // ── Small project: include FULL content (no truncation) ──
-  const totalChars = keys.reduce((sum, k) => sum + (files[k] || '').length, 0);
-  const isSmallProject = keys.length <= 3 && totalChars < 12000;
-
-  if (isSmallProject) {
+  if (totalChars < 50000) {
+    // Include ALL files in full — this is the key to cross-file coherence
     out += '── CODICE COMPLETO DEL PROGETTO ──\n';
     for (const k of keys) {
       out += `--- ${k} ---\n${files[k]}\n\n`;
     }
   } else {
-    // ── Large project: use head/tail extracts ──
-    const extracts = [];
-    for (const pattern of IMPORTANT) {
-      if (files[pattern]) {
-        extracts.push({ path: pattern, content: files[pattern] });
-      }
-    }
-    // Also include any file that looks like an entry point but wasn't in the list
+    // Very large project: full content for important files, head/tail for others
+    out += '── CODICE DEL PROGETTO ──\n';
+    const IMPORTANT = /\.(html|css|jsx|tsx)$|package\.json|server\.(js|ts)$|app\.(js|ts)$/i;
     for (const k of keys) {
-      if (extracts.length >= 6) break;
-      if (extracts.find(e => e.path === k)) continue;
-      if (/^(src\/)?(main|index|app)\.(jsx?|tsx?)$/i.test(k) || k === 'app.js') {
-        extracts.push({ path: k, content: files[k] });
+      if (out.length > BUDGET - 2000) {
+        out += `--- ${k} --- [omesso per budget]\n\n`;
+        continue;
       }
-    }
-
-    if (extracts.length) {
-      out += '── FILE CHIAVE (estratti) ──\n';
-      let extractBudget = Math.floor(BUDGET * 0.55);
-      for (const ex of extracts) {
-        const snippet = headTail(ex.content, HEAD_LINES, TAIL_LINES);
-        const chunk = `--- ${ex.path} ---\n${snippet}\n\n`;
-        if (out.length + chunk.length > extractBudget + 2000) {
-          // over budget, use smaller extract
-          const small = headTail(ex.content, 15, 8);
-          out += `--- ${ex.path} ---\n${small}\n\n`;
-        } else {
-          out += chunk;
-        }
+      const content = files[k] || '';
+      if (IMPORTANT.test(k) || content.length < 8000) {
+        out += `--- ${k} ---\n${content}\n\n`;
+      } else {
+        out += `--- ${k} ---\n${headTail(content, 60, 30)}\n\n`;
       }
     }
   }
 
-  // ── 3. Changed files in current job ──
-  const changed = job?.changedFiles || [];
-  if (changed.length) {
-    out += '── FILE MODIFICATI (job corrente) ──\n';
-    out += changed.join(', ') + '\n\n';
-    // Include brief head of each changed file not already extracted
-    const alreadyExtracted = new Set(extracts.map(e => e.path));
-    for (const cf of changed) {
-      if (alreadyExtracted.has(cf) || !files[cf]) continue;
-      if (out.length > BUDGET - 1000) break;
-      const snippet = headTail(files[cf], 20, 10);
-      out += `--- ${cf} (modificato) ---\n${snippet}\n\n`;
-    }
-  }
-
-  // ── 4. Recent job logs ──
+  // ── 3. Recent job logs ──
   if (job?.runLogs) {
     const logSnippet = job.runLogs.slice(-1500);
     out += '── LOG RECENTI ──\n' + logSnippet + '\n\n';
@@ -1320,7 +1321,7 @@ function buildContextPack(job, plan) {
     out += job.errorsDetected.map(e => `[${e.type}] ${e.message}`).join('\n') + '\n\n';
   }
 
-  // ── 5. Plan summary (compact) ──
+  // ── 4. Plan summary (compact) ──
   if (plan?.fileTree) {
     const pending = plan.fileTree.filter(f => !files[f] || files[f].length < 50);
     if (pending.length) {
@@ -1329,7 +1330,7 @@ function buildContextPack(job, plan) {
     }
   }
 
-  // Trim to budget
+  // Soft trim
   if (out.length > BUDGET) out = out.slice(0, BUDGET) + '\n[… context troncato …]\n';
 
   return out;
