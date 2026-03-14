@@ -545,6 +545,27 @@
   <div class="mbox plan-modal" id="plan-modal"></div>
 </div>
 
+<!-- CONTEXT TRANSFER MODAL -->
+<div class="ov" id="ctx-transfer-ov">
+  <div class="mbox ctx-transfer-modal" id="ctx-transfer-modal">
+    <div class="modal-spin-header ctx-header">
+      <div class="modal-spin-icon">🔄</div>
+      <div class="ctx-title-wrap">
+        <div class="ctx-title">Chat lunga</div>
+        <div class="ctx-subtitle">Il contesto sta diventando troppo grande per mantenere coerenza</div>
+      </div>
+    </div>
+    <div class="ctx-body">
+      <p>Trasferisco automaticamente tutto il contesto del progetto (file, piano, decisioni) in una <strong>chat pulita</strong>.</p>
+      <p>I tuoi file restano intatti. Solo la conversazione viene compressa in un riassunto intelligente.</p>
+    </div>
+    <div class="ctx-actions">
+      <button class="ctx-btn confirm" id="ctx-transfer-btn">✓ Trasferisci contesto</button>
+      <button class="ctx-btn skip" id="ctx-skip-btn">⏭ Continua così</button>
+    </div>
+  </div>
+</div>
+
 <!-- MOBILE NAV -->
 <div class="mobile-nav" id="mobile-nav">
   <button class="mobile-nav-btn active" id="mnav-chat" onclick="mobileSwitch('chat')"><span class="mnav-icon">💬</span>Chat</button>
@@ -758,6 +779,8 @@ async function send() {
   S.busy=true; document.getElementById('send-btn').disabled=true; startProg();
   if (S.agents) await runAgents(text,mode,qual); else await runDirect(text,mode,qual);
   S.busy=false; document.getElementById('send-btn').disabled=false; stopProg();
+  // Check if context transfer is needed (chat getting too long)
+  checkContextTransfer();
 }
 
 async function runAgents(prompt,mode,qual) {
@@ -828,6 +851,8 @@ async function runAgents(prompt,mode,qual) {
       renderBbl('ai', `✅ **Fullstack generato!**\n\n🌐 Frontend: **${feLines} righe** (index.html)\n⚙️ Backend: **${beLines} righe** (server.py)\n📦 requirements.txt incluso\n\nClicca **🚀 Deploy Guide** per pubblicarlo online.`);
       saveMsg('ai','✅ Fullstack generato.');
       toast('✅ Fullstack generato!','ok');
+      // Update project memory after fullstack generation
+      updateProjectSummary({ userGoal: prompt, changedFiles: ['index.html', 'server.py', 'requirements.txt'] }, S.cur.plan);
       // Show deploy guide button in chat
       addDeployBtn();
     } catch(e) {
