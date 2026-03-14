@@ -1104,4 +1104,381 @@ Correggi TUTTI i problemi visivi. Restituisci i file COMPLETI corretti.`;
   }
 }
 
+// ══════════════════════════════════
+// RUNTIME FEEDBACK LOOP
+// ══════════════════════════════════
+// Executes the generated HTML in a hidden iframe, captures console errors,
+// uncaught exceptions, and missing DOM elements, then feeds them back
+// to the LLM for surgical fixes. Like Claude Code's "run → see error → fix" loop.
+
+const RUNTIME_MAX_RETRIES = 3;
+
+async function runRuntimeFeedbackLoop(job, plan, prompt, mode, qual) {
+  if (!S.cur?.files) return;
+
+  const htmlFile = S.cur.files['index.html'] || S.cur.files['public/index.html'];
+  if (!htmlFile) return; // only works for static HTML
+
+  addLog('test', '▶', 'Runtime Test', 'Eseguo l\'app in sandbox per catturare errori…');
+  renderBbl('ai', '▶ **Runtime Test** — Eseguo la tua app per trovare bug…');
+
+  for (let attempt = 1; attempt <= RUNTIME_MAX_RETRIES; attempt++) {
+    try {
+      const fullHtml = assembleFullHtml();
+
+      // Execute and capture errors
+      const runtimeResult = await executeAndCapture(fullHtml);
+
+      if (runtimeResult.errors.length === 0 && runtimeResult.warnings.length === 0) {
+        addLog('test', '✅', 'Runtime Test', 'Nessun errore runtime — app funzionante!');
+        renderBbl('ai', '✅ **Runtime Test superato** — nessun errore JavaScript rilevato.');
+        return;
+      }
+
+      // Found errors — report and fix
+      const errorSummary = runtimeResult.errors.map(e => '❌ ' + e).join('\n');
+      const warnSummary = runtimeResult.warnings.map(w => '⚠️ ' + w).join('\n');
+      addLog('test', '🔴', 'Runtime Test',
+        runtimeResult.errors.length + ' errori, ' + runtimeResult.warnings.length + ' warning (tentativo ' + attempt + '/' + RUNTIME_MAX_RETRIES + ')');
+      renderBbl('ai', '🔴 **Runtime Test**: ' + runtimeResult.errors.length + ' errori trovati. Correzione automatica…\n\n' +
+        errorSummary.slice(0, 500));
+
+      // Fix using surgical patch
+      const fixed = await runRuntimeFixPass(job, prompt, mode, qual, runtimeResult);
+      if (!fixed) {
+        addLog('test', '⚠️', 'Runtime Fix', 'Fix non ha prodotto risultati.');
+        if (attempt === RUNTIME_MAX_RETRIES) break;
+        continue;
+      }
+
+      addLog('test', '🔄', 'Runtime Test', 'Fix applicato — ri-eseguo per verificare…');
+
+    } catch(err) {
+      console.warn('Runtime feedback error:', err);
+      addLog('test', '⚠️', 'Runtime Test', 'Errore: ' + err.message);
+      return;
+    }
+  }
+}
+
+// Execute HTML in hidden iframe and capture all errors/warnings
+function executeAndCapture(html) {
+  return new Promise((resolve) => {
+    const errors = [];
+    const warnings = [];
+
+    // Inject error-capturing script at the very start of the HTML
+    const captureScript = `<script>
+(function() {
+  var _errors = [];
+  var _warnings = [];
+
+  // Capture console.error
+  var origError = console.error;
+  console.error = function() {
+    var msg = Array.from(arguments).map(function(a) { return String(a); }).join(' ');
+    _errors.push(msg);
+    origError.apply(console, arguments);
+  };
+
+  // Capture console.warn
+  var origWarn = console.warn;
+  console.warn = function() {
+    var msg = Array.from(arguments).map(function(a) { return String(a); }).join(' ');
+    _warnings.push(msg);
+    origWarn.apply(console, arguments);
+  };
+
+  // Capture uncaught errors
+  window.onerror = function(msg, src, line, col, err) {
+    _errors.push('[Line ' + line + '] ' + msg + (err && err.stack ? '\\n' + err.stack.split('\\n').slice(0,3).join('\\n') : ''));
+    return false;
+  };
+
+  // Capture unhandled promise rejections
+  window.onunhandledrejection = function(e) {
+    _errors.push('[Promise] ' + (e.reason ? (e.reason.message || String(e.reason)) : 'Unhandled rejection'));
+  };
+
+  // After page loads, check for common DOM issues
+  window.addEventListener('load', function() {
+    setTimeout(function() {
+      // Check for onclick handlers referencing undefined functions
+      document.querySelectorAll('[onclick]').forEach(function(el) {
+        var fn = el.getAttribute('onclick').match(/^(\\w+)\\s*\\(/);
+        if (fn && typeof window[fn[1]] === 'undefined') {
+          _errors.push('[DOM] onclick="' + fn[1] + '()" — funzione non definita');
+        }
+      });
+
+      // Check for empty visible containers
+      document.querySelectorAll('main, .container, .content, #app, [role="main"]').forEach(function(el) {
+        if (el.children.length === 0 && el.textContent.trim() === '') {
+          _warnings.push('[DOM] Container "' + (el.id || el.className || el.tagName) + '" è vuoto — nessun contenuto visibile');
+        }
+      });
+
+      // Check if body has almost no visible content
+      if (document.body.innerText.trim().length < 20 && !document.querySelector('canvas')) {
+        _errors.push('[DOM] Pagina quasi vuota — body ha meno di 20 caratteri di testo visibile');
+      }
+
+      // Check for unstyled buttons (browser default)
+      document.querySelectorAll('button').forEach(function(btn) {
+        var style = getComputedStyle(btn);
+        if (style.backgroundColor === 'rgb(239, 239, 239)' || style.backgroundColor === 'buttonface') {
+          _warnings.push('[Style] Bottone "' + (btn.textContent||'').slice(0,30) + '" ha stile browser default — non stilizzato');
+        }
+      });
+
+      // Report back via a custom property
+      window.__forgeErrors = _errors;
+      window.__forgeWarnings = _warnings;
+    }, 800);
+  });
+})();
+<` + '/script>';
+
+    // Inject right after <head> or at start
+    let injectedHtml;
+    if (html.includes('<head>')) {
+      injectedHtml = html.replace('<head>', '<head>' + captureScript);
+    } else if (html.includes('<html')) {
+      injectedHtml = html.replace(/<html[^>]*>/, '$&' + captureScript);
+    } else {
+      injectedHtml = captureScript + html;
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1280px;height:800px;border:none;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+
+    const timeout = setTimeout(() => {
+      // Timeout — collect whatever we have
+      try {
+        const win = iframe.contentWindow;
+        if (win) {
+          errors.push(...(win.__forgeErrors || []));
+          warnings.push(...(win.__forgeWarnings || []));
+        }
+      } catch(e) {}
+      document.body.removeChild(iframe);
+      resolve({ errors: errors.slice(0, 20), warnings: warnings.slice(0, 10) });
+    }, 4000);
+
+    iframe.onload = () => {
+      // Wait for the load event + our 800ms timeout inside the script
+      setTimeout(() => {
+        try {
+          const win = iframe.contentWindow;
+          if (win) {
+            errors.push(...(win.__forgeErrors || []));
+            warnings.push(...(win.__forgeWarnings || []));
+          }
+        } catch(e) {
+          errors.push('[iframe] Cannot access contentWindow: ' + e.message);
+        }
+        clearTimeout(timeout);
+        document.body.removeChild(iframe);
+        resolve({ errors: errors.slice(0, 20), warnings: warnings.slice(0, 10) });
+      }, 1500);
+    };
+
+    iframe.onerror = () => {
+      clearTimeout(timeout);
+      errors.push('[iframe] Failed to load HTML');
+      document.body.removeChild(iframe);
+      resolve({ errors, warnings });
+    };
+
+    iframe.srcdoc = injectedHtml;
+  });
+}
+
+// Fix runtime errors using surgical patches
+async function runRuntimeFixPass(job, prompt, mode, qual, runtimeResult) {
+  const files = S.cur?.files || {};
+  const fileKeys = Object.keys(files);
+
+  // Include full file contents for accurate fixes
+  let fileContext = '';
+  const BUDGET = 50000;
+  for (const f of fileKeys) {
+    if (!files[f]) continue;
+    const add = '── ' + f + ' ──\n' + files[f] + '\n\n';
+    if (fileContext.length + add.length > BUDGET) break;
+    fileContext += add;
+  }
+
+  const errorList = [
+    ...runtimeResult.errors.map(e => '[ERRORE] ' + e),
+    ...runtimeResult.warnings.map(w => '[WARNING] ' + w)
+  ].join('\n');
+
+  const fixSys = `Sei un DEBUGGER ESPERTO. L'app è stata ESEGUITA in un browser e ha prodotto questi ERRORI RUNTIME REALI (non teorici — sono errori effettivi dalla console JavaScript).
+
+ERRORI RUNTIME CATTURATI:
+${errorList}
+
+RICHIESTA UTENTE ORIGINALE: "${prompt}"
+
+MISSIONE: correggi CHIRURGICAMENTE solo le parti di codice che causano questi errori.
+
+REGOLE DI FIX:
+- Usa il formato PATCH per modifiche chirurgiche (vedi sotto)
+- NON riscrivere file interi se il bug è in 5 righe
+- Per ogni errore: identifica la causa ESATTA, modifica SOLO le righe necessarie
+- Se una funzione non è definita → aggiungila
+- Se un ID non esiste → aggiungilo nel markup
+- Se un import è sbagliato → correggi il path
+- Se la pagina è vuota → aggiungi contenuti reali
+
+FORMATO OUTPUT — SOLO JSON:
+{
+  "summary": "cosa hai corretto",
+  "filesChanged": [
+    {
+      "path": "file.ext",
+      "action": "patch",
+      "patches": [
+        {"find": "codice originale esatto da trovare", "replace": "codice corretto sostitutivo"},
+        {"find": "altro codice da fixare", "replace": "fix"}
+      ]
+    }
+  ]
+}
+
+OPPURE per file che devono essere riscritti completamente:
+{
+  "filesChanged": [
+    {"path": "file.ext", "action": "update", "content": "contenuto completo"}
+  ]
+}
+
+Preferisci SEMPRE "patch" a "update" — modifica solo ciò che serve.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({
+        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.3, stream: true,
+        system: fixSys,
+        messages: [{ role: 'user', content: 'FILE DEL PROGETTO:\n' + fileContext + '\n\nCorreggi gli errori runtime. Usa patch chirurgiche.' }]
+      })
+    });
+    if (!r.ok) throw new Error('Runtime fix API error: ' + r.status);
+    const raw = await readStreamWithProgress(r, 'fix');
+
+    const parsed = parseAIResponse(raw, mode);
+    if (parsed.type === 'json' && parsed.data.filesChanged && parsed.data.filesChanged.length > 0) {
+      saveSnapshot('Pre-runtime-fix', job.id);
+      const result = applyJsonPatchWithSurgical(parsed, prompt);
+      saveSnapshot('Post-runtime-fix', job.id);
+      addLog('test', '✅', 'Runtime Fix', result.changedFiles.length + ' file corretti: ' + result.changedFiles.join(', ') +
+        (result.patchCount > 0 ? ' (' + result.patchCount + ' patch chirurgiche)' : ''));
+      renderBbl('ai', '🔧 **Runtime Fix** — ' + result.changedFiles.length + ' file, ' +
+        result.patchCount + ' patch chirurgiche applicate');
+      return true;
+    }
+    return false;
+  } catch(err) {
+    addLog('test', '⚠️', 'Runtime Fix', 'Errore: ' + err.message);
+    return false;
+  }
+}
+
+// ══════════════════════════════════
+// SURGICAL PATCH SYSTEM
+// ══════════════════════════════════
+// Applies both full file updates and surgical find/replace patches.
+// Like Claude Code's Edit tool — only changes what's needed.
+
+function applyJsonPatchWithSurgical(parsed, prompt) {
+  const result = { changedFiles: [], totalLines: 0, patchCount: 0 };
+
+  if (parsed.type !== 'json' || !parsed.data.filesChanged) {
+    return applyJsonPatch(parsed, prompt);
+  }
+
+  const { filesChanged, summary, nextBatch } = parsed.data;
+  for (const fc of filesChanged) {
+    if (!fc.path) continue;
+
+    if (fc.action === 'patch' && fc.patches && Array.isArray(fc.patches)) {
+      // ── SURGICAL PATCH MODE ──
+      let content = S.cur.files[fc.path] || '';
+      let patchesApplied = 0;
+
+      for (const patch of fc.patches) {
+        if (!patch.find || patch.replace === undefined) continue;
+
+        if (content.includes(patch.find)) {
+          content = content.replace(patch.find, patch.replace);
+          patchesApplied++;
+        } else {
+          // Try fuzzy match: trim whitespace differences
+          const findTrimmed = patch.find.replace(/\s+/g, ' ').trim();
+          const lines = content.split('\n');
+          let found = false;
+          for (let i = 0; i < lines.length; i++) {
+            // Check if the find string spans multiple lines starting at this line
+            for (let span = 1; span <= Math.min(20, lines.length - i); span++) {
+              const segment = lines.slice(i, i + span).join('\n');
+              if (segment.replace(/\s+/g, ' ').trim() === findTrimmed) {
+                // Found it with whitespace normalization
+                const before = lines.slice(0, i).join('\n');
+                const after = lines.slice(i + span).join('\n');
+                content = before + (before ? '\n' : '') + patch.replace + (after ? '\n' : '') + after;
+                patchesApplied++;
+                found = true;
+                break;
+              }
+            }
+            if (found) break;
+          }
+          if (!found) {
+            console.warn('[Surgical] Patch not found in ' + fc.path + ':', patch.find.slice(0, 80));
+            // If patch.replace looks like it should be appended (new function/code), append it
+            if (patch.find.includes('// APPEND') || patch.find.includes('/* ADD */')) {
+              content += '\n' + patch.replace;
+              patchesApplied++;
+            }
+          }
+        }
+      }
+
+      if (patchesApplied > 0) {
+        S.cur.files[fc.path] = content;
+        result.changedFiles.push(fc.path);
+        result.totalLines += content.split('\n').length;
+        result.patchCount += patchesApplied;
+      }
+    } else if (fc.content) {
+      // ── FULL FILE MODE (create or update) ──
+      S.cur.files[fc.path] = fc.content;
+      result.changedFiles.push(fc.path);
+      result.totalLines += fc.content.split('\n').length;
+    }
+  }
+
+  result.summary = summary || '';
+  result.nextBatch = nextBatch || { needed: false };
+
+  // Update project
+  S.cur.conv = S.history;
+  save();
+  updateFileTabs(); updateFilesList();
+  if (result.changedFiles.length) showFile(result.changedFiles[0]);
+  document.getElementById('deploy-btn').style.display = 'flex';
+
+  // Preview
+  if (!needsBuild()) {
+    const htmlFile = S.cur.files['index.html'] || S.cur.files['public/index.html'];
+    if (htmlFile) updatePrev(htmlFile);
+  }
+
+  return result;
+}
+
 

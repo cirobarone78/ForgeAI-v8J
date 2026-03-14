@@ -1121,10 +1121,26 @@ async function runBatchedGeneration(job, plan, prompt, mode, qual) {
     const currentPending = getPendingFiles(plan);
     if (currentPending.length === 0) break;
 
+    // ── CHECK USER REDIRECT: pick up any message typed during generation ──
+    const userRedirect = checkUserRedirect();
+    if (userRedirect) {
+      prompt = prompt + '\n\n[CORREZIONE UTENTE durante generazione]: ' + userRedirect;
+      renderBbl('ai', '💬 **Feedback ricevuto** — integro: "' + userRedirect.slice(0, 100) + '"');
+      addLog('plan', '💬', 'Redirect', 'Prompt aggiornato con feedback utente');
+    }
+
     const sortedPending = sortFilesByResponsibility(currentPending);
     const targetFiles = pickBatchFiles(sortedPending, FILES_PER_BATCH);
 
-    addLog('ui', '📦', 'Batch ' + batchNum + '/' + totalBatches,
+    // ── NARRATE: tell user what we're doing ──
+    const fileDesc = targetFiles[0];
+    const stepAction = /\.css$/.test(fileDesc) ? 'Creo il design system e gli stili'
+      : /\.html$/.test(fileDesc) ? 'Costruisco la struttura e il layout'
+      : /\.(js|jsx|tsx)$/.test(fileDesc) ? 'Implemento la logica e le interazioni'
+      : 'Genero file di configurazione';
+    renderBbl('ai', '🔨 **Step ' + batchNum + '/' + totalBatches + '** — ' + stepAction + ' → `' + fileDesc + '`');
+
+    addLog('ui', '📦', 'Step ' + batchNum + '/' + totalBatches,
       'Genero: ' + targetFiles.join(', '));
     updateJob(job, { status: 'APPLY', attempt: batchNum });
 
@@ -1163,12 +1179,13 @@ async function runBatchedGeneration(job, plan, prompt, mode, qual) {
       allChangedFiles.push(...result.changedFiles);
       updateProjectSummary(job, plan);
 
-      addLog('ui', '✅', 'Batch ' + batchNum,
+      addLog('ui', '✅', 'Step ' + batchNum,
         result.changedFiles.length + ' file (' + result.totalLines + ' righe): ' + result.changedFiles.join(', '));
 
-      // Short feedback in chat
-      renderBbl('ai', '📦 **Batch ' + batchNum + '/' + totalBatches + '** — ' +
-        result.changedFiles.length + ' file generati (' + result.totalLines + ' righe)');
+      // Narrative: describe what was created
+      const patchInfo = result.patchCount > 0 ? ' (' + result.patchCount + ' patch chirurgiche)' : '';
+      renderBbl('ai', '✅ **Step ' + batchNum + '/' + totalBatches + '** completato — ' +
+        result.changedFiles.join(', ') + ' (' + result.totalLines + ' righe)' + patchInfo);
 
       // Check if we've hit a milestone boundary → run sandbox verify
       const milestone = getMilestoneForFile(plan, targetFiles[0]);
@@ -1674,12 +1691,27 @@ FORMATO OUTPUT OBBLIGATORIO — rispondi SOLO con questo JSON valido (nessun tes
   }
 }
 
-REGOLE JSON:
-- "action" può essere "create" o "update". Mai "delete" — segnala in summary se serve.
-- Ogni "content" deve essere il file COMPLETO, non una patch parziale.
-- Se il progetto è troppo grande per un batch, metti nextBatch.needed=true e suggerisci il prompt per continuare.
-- Per HTML semplice (senza Node): metti tutti i file in un batch. Usa file separati (html, css, js).
-- Per React/Vite: primo batch = package.json + vite.config + index.html + main.jsx + App.jsx. Batch successivi = componenti.
+FORMATO PATCH CHIRURGICA (per modifiche a file esistenti — PREFERITO rispetto a "update"):
+{
+  "summary": "cosa hai corretto",
+  "filesChanged": [
+    {
+      "path": "file.ext",
+      "action": "patch",
+      "patches": [
+        {"find": "codice originale esatto da trovare nel file", "replace": "codice sostitutivo"},
+        {"find": "altra porzione da modificare", "replace": "versione corretta"}
+      ]
+    }
+  ]
+}
+
+REGOLE:
+- "action" può essere "create" (nuovo file), "update" (riscrittura completa), o "patch" (modifica chirurgica).
+- Per NUOVI file: usa "create" con "content" completo.
+- Per MODIFICHE a file esistenti: PREFERISCI "patch" — modifica SOLO le righe che devono cambiare.
+- Ogni "find" in patch deve essere una stringa ESATTA presente nel file (copia-incolla dal codice esistente).
+- Mai "delete" — segnala in summary se serve eliminare file.
 - NON generare markdown, backtick o testo fuori dal JSON.`;
 }
 
@@ -1813,9 +1845,15 @@ function finalizeStreamingProgress(el, fileCount, charCount) {
 }
 
 
-// Apply multi-file JSON patch to project
+// Apply multi-file JSON patch to project (supports both full and surgical patches)
 function applyJsonPatch(parsed, prompt) {
-  const result = { changedFiles: [], totalLines: 0 };
+  // Delegate to surgical patch system if any patches exist
+  if (parsed.type === 'json' && parsed.data.filesChanged &&
+      parsed.data.filesChanged.some(fc => fc.action === 'patch')) {
+    return applyJsonPatchWithSurgical(parsed, prompt);
+  }
+
+  const result = { changedFiles: [], totalLines: 0, patchCount: 0 };
 
   if (parsed.type === 'json') {
     const { filesChanged, summary, nextBatch } = parsed.data;

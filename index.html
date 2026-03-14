@@ -762,8 +762,63 @@ function setupDragDrop() {
 // ══════════════════════════════════
 // SEND
 // ══════════════════════════════════
+// INTERACTIVE CHAT — user can type during generation to redirect
+// ══════════════════════════════════
+S.pendingRedirect = null; // stores user message typed during generation
+
+function setupInteractiveChat() {
+  const ta = document.getElementById('chat-ta');
+  const sendBtn = document.getElementById('send-btn');
+
+  // Override send button behavior during generation
+  sendBtn.addEventListener('click', (e) => {
+    if (S.busy) {
+      e.stopPropagation();
+      e.preventDefault();
+      sendDuringGeneration();
+    }
+  }, true); // capture phase to intercept before onclick
+
+  // Override Enter key during generation
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && S.busy) {
+      e.stopPropagation();
+      e.preventDefault();
+      sendDuringGeneration();
+    }
+  }, true);
+}
+
+function sendDuringGeneration() {
+  const ta = document.getElementById('chat-ta');
+  const text = ta.value.trim();
+  if (!text) return;
+
+  S.pendingRedirect = text;
+  ta.value = '';
+  resizeTA(ta);
+
+  // Show in chat as a user redirect message
+  renderBbl('user', '💬 ' + text);
+  saveMsg('user', '[redirect] ' + text);
+  addLog('plan', '💬', 'Utente', 'Messaggio ricevuto — verrà integrato nel prossimo step');
+  toast('💬 Messaggio integrato nel prossimo step', 'ok');
+}
+
+// Check if user has sent a redirect message during generation
+function checkUserRedirect() {
+  if (!S.pendingRedirect) return null;
+  const msg = S.pendingRedirect;
+  S.pendingRedirect = null;
+  return msg;
+}
+
 async function send() {
-  if (S.busy) return;
+  if (S.busy) {
+    // During generation, redirect via sendDuringGeneration
+    sendDuringGeneration();
+    return;
+  }
   const ta=document.getElementById('chat-ta');
   const text=ta.value.trim(); if (!text) return;
   if (!S.key){openApi();toast('⚠️ Imposta la API Key','err');return;}
@@ -777,9 +832,20 @@ async function send() {
   // Cap history to prevent memory bloat (API only uses last 6 anyway)
   if (S.history.length > 20) S.history = S.history.slice(-16);
   S.attachments = []; renderUploads();
-  S.busy=true; document.getElementById('send-btn').disabled=true; startProg();
+  S.busy=true;
+  // During generation, change send button to show it's a "redirect" action
+  const sendBtn = document.getElementById('send-btn');
+  sendBtn.textContent = '💬';
+  sendBtn.title = 'Invia feedback durante la generazione';
+  document.getElementById('chat-ta').placeholder = 'Scrivi per correggere/guidare la generazione…';
+  startProg();
   if (S.agents) await runAgents(text,mode,qual); else await runDirect(text,mode,qual);
-  S.busy=false; document.getElementById('send-btn').disabled=false; stopProg();
+  S.busy=false;
+  sendBtn.disabled=false;
+  sendBtn.textContent = '➤';
+  sendBtn.title = '';
+  document.getElementById('chat-ta').placeholder = 'Descrivi l\'app… o allega immagini/file 📎';
+  stopProg();
   // Check if context transfer is needed (chat getting too long)
   checkContextTransfer();
 }
@@ -964,6 +1030,17 @@ async function runAgents(prompt,mode,qual) {
 
         if (S.currentJob?.id !== job.id) return; // cancelled during QG
 
+        // ── RUNTIME FEEDBACK LOOP (execute → capture errors → fix) ──
+        if (!isNodeProject()) {
+          try {
+            await runRuntimeFeedbackLoop(job, plan, prompt, mode, qual);
+          } catch(rtErr) {
+            console.warn('Runtime feedback error:', rtErr.message);
+            addLog('test', '⚠️', 'Runtime Test', 'Errore: ' + rtErr.message);
+          }
+          if (S.currentJob?.id !== job.id) return;
+        }
+
         // ── VISUAL REVIEW (Preview-in-the-loop) ──
         if (!isNodeProject()) {
           try {
@@ -1083,6 +1160,17 @@ async function runAgents(prompt,mode,qual) {
       }
 
       if (S.currentJob?.id !== job.id) return; // cancelled during QG
+
+      // ── RUNTIME FEEDBACK LOOP (single-shot path) ──
+      if (!isNodeProject()) {
+        try {
+          await runRuntimeFeedbackLoop(job, plan, prompt, mode, qual);
+        } catch(rtErr) {
+          console.warn('Runtime feedback error:', rtErr.message);
+          addLog('test', '⚠️', 'Runtime Test', 'Errore: ' + rtErr.message);
+        }
+        if (S.currentJob?.id !== job.id) return;
+      }
 
       // ── VISUAL REVIEW (single-shot path) ──
       if (!isNodeProject()) {

@@ -203,7 +203,7 @@ function init() {
   }
   if (S.key) setDot('on');
   if (S.projects.length) loadProj(S.projects[S.projects.length-1]);
-  setupInput(); setupResize(); setupDragDrop();
+  setupInput(); setupResize(); setupDragDrop(); setupInteractiveChat();
   // Close model dropdown on outside click
   document.addEventListener('click', e => {
     const wrap = document.querySelector('.model-wrap');
