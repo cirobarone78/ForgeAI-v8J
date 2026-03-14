@@ -4,8 +4,8 @@
 
 const MODELS = {
   haiku:  'claude-haiku-4-5-20251001',
-  sonnet: 'claude-sonnet-4-5-20250929',
-  opus:   'claude-opus-4-5-20250918'
+  sonnet: 'claude-sonnet-4-6',
+  opus:   'claude-opus-4-6'
 };
 
 const MODEL_META = {
