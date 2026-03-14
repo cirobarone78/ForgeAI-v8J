@@ -150,13 +150,12 @@ REGOLA ASSOLUTA: SOLO codice puro. Zero spiegazioni, zero markdown, zero backtic
     method: 'POST',
     headers: {'Content-Type':'application/json','x-api-key':S.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
     body: JSON.stringify({
-      model: getModelForAgent('test'), max_tokens: 32000, temperature: 0.3, system: reviewSys,
+      model: getModelForAgent('test'), max_tokens: 32000, temperature: 0.3, stream: true, system: reviewSys,
       messages: [{ role: 'user', content: reviewMsg }]
     })
   });
   if (!r.ok) throw new Error('Review failed');
-  const data = await r.json();
-  const reviewed = data.content.map(b => b.text || '').join('').trim().replace(/^```[\w]*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
+  const reviewed = (await readStreamWithProgress(r, 'test')).replace(/^```[\w]*\n?/m, '').replace(/\n?```\s*$/m, '').trim();
   return (reviewed.length > code.length * 0.5 && (reviewed.includes('<') || reviewed.includes('def ') || reviewed.includes('function '))) ? reviewed : code;
 }
 
@@ -314,11 +313,11 @@ function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
   const allMarkup = fileKeys.filter(f => /\.(html|jsx|tsx|vue)$/.test(f)).map(f => files[f] || '').join('\n');
   const markupLines = allMarkup.split('\n').length;
 
-  // 1. CSS quantity baseline — STRICTER: min 50 lines for complex, 30 for simple
-  const minCss = isComplexRequest(prompt) ? 50 : 30;
-  if (cssLines < minCss && markupLines > 40) {
+  // 1. CSS quantity baseline — min 100 lines for complex, 60 for simple
+  const minCss = isComplexRequest(prompt) ? 100 : 60;
+  if (cssLines < minCss && markupLines > 30) {
     issues.push({ severity: 'high', type: 'UI_TOO_BASIC',
-      message: 'Solo ' + cssLines + ' righe CSS per ' + markupLines + ' righe di markup (minimo ' + minCss + ' per questa complessità). UI troppo basilare.' });
+      message: 'Solo ' + cssLines + ' righe CSS per ' + markupLines + ' righe di markup (minimo ' + minCss + '). UI troppo basilare — serve dark theme, card shadows, hover states, transitions.' });
   }
 
   // 2. Background check — no raw white default — PROMOTED TO HIGH
@@ -402,16 +401,23 @@ function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
       message: reallyUncovered.length + ' classi HTML senza styling CSS: ' + reallyUncovered.slice(0, 5).map(c => '.' + c).join(', ') });
   }
 
-  // 10. NEW: Main file size check — complex apps need substantial main files
-  if (isComplexRequest(prompt)) {
-    const mainFiles = fileKeys.filter(f => /^(index\.html|src\/App\.(jsx|tsx)|app\/page\.(jsx|tsx))$/.test(f));
-    for (const mf of mainFiles) {
-      const lines = (files[mf] || '').split('\n').length;
-      if (lines < 50) {
-        issues.push({ severity: 'high', type: 'SKELETON_UI',
-          message: 'File principale "' + mf + '" ha solo ' + lines + ' righe — troppo corto per app complessa (minimo 50).' });
-      }
+  // 10. Main file size check — ALL projects need substantial files
+  const mainFiles = fileKeys.filter(f => /^(index\.html|src\/App\.(jsx|tsx)|app\/page\.(jsx|tsx))$/.test(f));
+  const minMainLines = isComplexRequest(prompt) ? 100 : 60;
+  for (const mf of mainFiles) {
+    const lines = (files[mf] || '').split('\n').length;
+    if (lines < minMainLines) {
+      issues.push({ severity: 'high', type: 'SKELETON_UI',
+        message: 'File "' + mf + '" ha solo ' + lines + ' righe (minimo ' + minMainLines + '). App scheletrica — servono contenuti reali, struttura UI completa, interattività.' });
     }
+  }
+
+  // 11. Total project size check — catch tiny projects that slip through
+  const totalLines = fileKeys.reduce((sum, f) => sum + (files[f] || '').split('\n').length, 0);
+  const minTotal = isComplexRequest(prompt) ? 250 : 120;
+  if (totalLines < minTotal && fileKeys.length >= 2) {
+    issues.push({ severity: 'high', type: 'SKELETON_UI',
+      message: 'Progetto troppo piccolo: solo ' + totalLines + ' righe totali su ' + fileKeys.length + ' file (minimo ' + minTotal + '). Servono contenuti completi.' });
   }
 
   return issues;
@@ -555,14 +561,14 @@ async function runQualityFixPass(job, plan, prompt, mode, qual, qReport) {
       .filter(f => files[f]).forEach(f => issueFiles.add(f));
   }
 
-  // Gather targeted file contents (budget ~24k chars — increased for quality fixes)
+  // Gather targeted file contents (budget ~40k chars — need full context for accurate fixes)
   let fileContext = '';
-  const BUDGET = 24000;
+  const BUDGET = 40000;
   const priorityOrder = [...issueFiles, ...fileKeys.filter(f => !issueFiles.has(f))];
   for (const f of priorityOrder) {
     if (!files[f]) continue;
     const content = files[f];
-    const maxSlice = issueFiles.has(f) ? 6000 : 2000; // More context for problematic files
+    const maxSlice = issueFiles.has(f) ? 12000 : 3000; // Full context for problematic files
     const add = '── ' + f + (issueFiles.has(f) ? ' [NEEDS FIX]' : '') + ' ──\n' + content.slice(0, maxSlice) + (content.length > maxSlice ? '\n/* … troncato … */' : '') + '\n\n';
     if (fileContext.length + add.length > BUDGET) break;
     fileContext += add;
@@ -589,8 +595,10 @@ CORREZIONE UI OBBLIGATORIA — il progetto ha styling insufficiente. Devi:
 - Transizioni smooth (0.2-0.3s ease)
 - Media query per mobile (max-width: 768px)
 - Se è dashboard/app: sidebar con bg scuro, main con bg leggermente diverso, stat cards visive
+- Se è un GIOCO: canvas/area di gioco con sfondo tematico, sprite/grafica colorata, HUD con score, effetti particellari, animazioni
 - OGNI classe CSS usata nell'HTML DEVE avere uno stile definito nel CSS. Zero classi orfane.
-- File principali (index.html, App.jsx) devono avere almeno 50+ righe per app complesse` : '';
+- File principali (index.html, App.jsx) devono avere almeno 100+ righe per app complesse
+- IL CSS DEVE AVERE ALMENO 100 RIGHE per app complesse, 60 per semplici` : '';
 
   const funcFixBlock = hasFuncIssues ? `
 CORREZIONE FUNZIONALE OBBLIGATORIA — ci sono bug strutturali. Devi:
@@ -633,13 +641,12 @@ ISTRUZIONI: Correggi TUTTI i problemi CRITICI. Per i problemi UI, aggiungi styli
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
-        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.3, system: fixSys,
+        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.5, stream: true, system: fixSys,
         messages: [{ role: 'user', content: fixMsg }]
       })
     });
     if (!r.ok) throw new Error('Quality fix API error: ' + r.status);
-    const data = await r.json();
-    const raw = data.content.map(b => b.text || '').join('').trim();
+    const raw = await readStreamWithProgress(r, 'fix');
 
     const parsed = parseAIResponse(raw, mode);
     if (parsed.type === 'json' && parsed.data.filesChanged && parsed.data.filesChanged.length > 0) {
@@ -659,7 +666,7 @@ ISTRUZIONI: Correggi TUTTI i problemi CRITICI. Per i problemi UI, aggiungi styli
 }
 
 // ── QUALITY GATE ORCHESTRATOR (v2: retry + incomplete status) ──
-const QG_MAX_RETRIES = 2;
+const QG_MAX_RETRIES = 4;
 
 async function runProjectQualityGate(job, plan, prompt, mode, qual) {
   if (!S.currentJob || S.currentJob.id !== job.id) return;
@@ -768,6 +775,710 @@ async function autoFixLoop(job, mode, qual) {
     renderBbl('ai', '❌ Errore fix: ' + e.message);
     toast('❌ Fix fallito', 'err');
   }
+}
+
+// ══════════════════════════════════
+// VISUAL REVIEW (Preview-in-the-loop)
+// ══════════════════════════════════
+// Renders the generated HTML in a hidden iframe, screenshots it,
+// sends the screenshot to Claude Vision asking "is this acceptable?",
+// and triggers a fix pass if not.
+
+const VISUAL_REVIEW_MAX_RETRIES = 2;
+
+async function runVisualReview(job, plan, prompt, mode, qual) {
+  if (!S.cur?.files) return;
+
+  // Only run for static HTML projects (srcdoc-previewable)
+  const htmlFile = S.cur.files['index.html'] || S.cur.files['public/index.html'];
+  if (!htmlFile) {
+    addLog('test', '⏭', 'Visual Review', 'Skip — nessun file HTML per preview.');
+    return;
+  }
+
+  // Check if html2canvas is loaded
+  if (typeof html2canvas === 'undefined') {
+    addLog('test', '⏭', 'Visual Review', 'Skip — html2canvas non caricato.');
+    return;
+  }
+
+  addLog('test', '📸', 'Visual Review', 'Renderizzo preview e catturo screenshot…');
+  renderBbl('ai', '📸 **Visual Review** — Renderizzo la tua app per verificare il risultato visivo…');
+
+  for (let attempt = 1; attempt <= VISUAL_REVIEW_MAX_RETRIES; attempt++) {
+    try {
+      // 1. Assemble full HTML (inline CSS + JS from separate files)
+      const fullHtml = assembleFullHtml();
+
+      // 2. Render in hidden iframe and screenshot
+      const screenshotBase64 = await capturePreviewScreenshot(fullHtml);
+      if (!screenshotBase64) {
+        addLog('test', '⚠️', 'Visual Review', 'Screenshot fallito — skip review visivo.');
+        return;
+      }
+
+      addLog('test', '🔍', 'Visual Review', 'Screenshot catturato — invio a Claude per analisi visiva (tentativo ' + attempt + '/' + VISUAL_REVIEW_MAX_RETRIES + ')…');
+
+      // 3. Send screenshot to Claude Vision API
+      const review = await callVisualReviewAPI(screenshotBase64, prompt, attempt);
+
+      if (!review) {
+        addLog('test', '⚠️', 'Visual Review', 'Analisi visiva fallita — skip.');
+        return;
+      }
+
+      // 4. Parse review verdict
+      if (review.passed) {
+        addLog('test', '✅', 'Visual Review', 'VISUAL_REVIEW passed: ' + (review.summary || 'App visivamente accettabile'));
+        renderBbl('ai', '✅ **Visual Review superato** — ' + (review.summary || 'L\'app appare professionale e funzionale.'));
+        return;
+      }
+
+      // 5. Not passed — trigger visual fix
+      addLog('test', '🔴', 'Visual Review', 'VISUAL_REVIEW failed: ' + (review.summary || 'Problemi visivi rilevati'));
+      renderBbl('ai', '🔍 **Visual Review**: problemi visivi rilevati. Correzione automatica (' + attempt + '/' + VISUAL_REVIEW_MAX_RETRIES + ')…\n\n' +
+        (review.issues || []).map(i => '- ' + i).join('\n'));
+
+      // 6. Run visual fix pass
+      const fixed = await runVisualFixPass(job, plan, prompt, mode, qual, review);
+      if (!fixed) {
+        addLog('test', '⚠️', 'Visual Review', 'Fix visivo non ha prodotto risultati.');
+        if (attempt === VISUAL_REVIEW_MAX_RETRIES) break;
+        continue;
+      }
+
+      // Loop back to re-screenshot and re-check
+      addLog('test', '🔄', 'Visual Review', 'Fix applicato — ri-verifico screenshot…');
+
+    } catch(err) {
+      console.warn('Visual review error:', err);
+      addLog('test', '⚠️', 'Visual Review', 'Errore: ' + err.message);
+      return;
+    }
+  }
+}
+
+// Assemble separate CSS/JS files into a single HTML for preview
+function assembleFullHtml() {
+  const files = S.cur?.files || {};
+  let html = files['index.html'] || files['public/index.html'] || '';
+
+  // If style.css exists and is linked but separate, inline it
+  if (files['style.css'] && html.includes('style.css')) {
+    html = html.replace(
+      /<link[^>]*href=["']style\.css["'][^>]*>/i,
+      '<style>\n' + files['style.css'] + '\n</style>'
+    );
+  }
+  if (files['styles.css'] && html.includes('styles.css')) {
+    html = html.replace(
+      /<link[^>]*href=["']styles\.css["'][^>]*>/i,
+      '<style>\n' + files['styles.css'] + '\n</style>'
+    );
+  }
+
+  // If app.js exists and is linked but separate, inline it
+  if (files['app.js'] && html.includes('app.js')) {
+    html = html.replace(
+      /<script[^>]*src=["']app\.js["'][^>]*><\/script>/i,
+      '<script>\n' + files['app.js'] + '\n</script>'
+    );
+  }
+  if (files['script.js'] && html.includes('script.js')) {
+    html = html.replace(
+      /<script[^>]*src=["']script\.js["'][^>]*><\/script>/i,
+      '<script>\n' + files['script.js'] + '\n</script>'
+    );
+  }
+
+  return html;
+}
+
+// Render HTML in hidden iframe and capture screenshot via html2canvas
+async function capturePreviewScreenshot(html) {
+  return new Promise((resolve) => {
+    // Create hidden iframe
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1280px;height:800px;border:none;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+
+    iframe.onload = async () => {
+      try {
+        // Wait for rendering + fonts + images to load
+        await new Promise(r => setTimeout(r, 1500));
+
+        const doc = iframe.contentDocument;
+        if (!doc || !doc.body) {
+          document.body.removeChild(iframe);
+          resolve(null);
+          return;
+        }
+
+        // Use html2canvas on the iframe's body
+        const canvas = await html2canvas(doc.body, {
+          width: 1280,
+          height: 800,
+          scale: 1,
+          useCORS: true,
+          allowTaint: true,
+          backgroundColor: null,
+          logging: false
+        });
+
+        const base64 = canvas.toDataURL('image/png').split(',')[1];
+        document.body.removeChild(iframe);
+        resolve(base64);
+      } catch(err) {
+        console.warn('html2canvas error:', err);
+        document.body.removeChild(iframe);
+        resolve(null);
+      }
+    };
+
+    iframe.onerror = () => {
+      document.body.removeChild(iframe);
+      resolve(null);
+    };
+
+    // Write HTML to iframe
+    iframe.srcdoc = html;
+  });
+}
+
+// Call Claude Vision API with screenshot for visual review
+async function callVisualReviewAPI(screenshotBase64, userPrompt, attempt) {
+  const reviewSys = `Sei un SENIOR UI/UX REVIEWER. Ti viene mostrato lo screenshot di un'app web generata da AI.
+
+RICHIESTA ORIGINALE DELL'UTENTE: "${userPrompt}"
+
+Il tuo compito è valutare se l'app è VISIVAMENTE ACCETTABILE come prodotto finito.
+
+CRITERI DI VALUTAZIONE (tutti devono essere soddisfatti):
+1. L'app NON è una pagina bianca o quasi vuota
+2. I colori sono coerenti e il background NON è bianco grezzo (#fff)
+3. I bottoni e gli input sono visivamente stilizzati (non grigi di default del browser)
+4. C'è una struttura visiva chiara (header, sidebar, cards, sezioni)
+5. Il testo è leggibile e ha gerarchia tipografica
+6. L'app sembra funzionale — gli elementi interattivi sono visibili e distinguibili
+7. Il layout non è rotto — gli elementi non si sovrappongono in modo errato
+8. L'app corrisponde a ciò che l'utente ha chiesto (se ha chiesto un gioco, si vede un gioco)
+
+RISPONDI SOLO con JSON valido:
+{
+  "passed": true/false,
+  "score": 1-10,
+  "summary": "breve descrizione di cosa vedi",
+  "issues": ["problema 1", "problema 2"],
+  "fixes": ["suggerimento fix 1", "suggerimento fix 2"]
+}
+
+Se lo score è >= 6, metti passed=true. Altrimenti passed=false.
+Sii SEVERO — un'app con bottoni grigi default, sfondo bianco, o layout rotto è score 1-3.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': S.key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: getModelForAgent('test'),
+        max_tokens: 1500,
+        temperature: 0.2,
+        system: reviewSys,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: screenshotBase64
+              }
+            },
+            {
+              type: 'text',
+              text: 'Analizza questo screenshot. L\'utente ha chiesto: "' + userPrompt.slice(0, 200) + '". Valuta se il risultato è visivamente accettabile.'
+            }
+          ]
+        }]
+      })
+    });
+
+    if (!r.ok) {
+      console.warn('Visual review API error:', r.status);
+      return null;
+    }
+
+    const data = await r.json();
+    const raw = data.content.map(b => b.text || '').join('').trim();
+
+    // Parse JSON response
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    return JSON.parse(jsonMatch[0]);
+
+  } catch(err) {
+    console.warn('Visual review API error:', err);
+    return null;
+  }
+}
+
+// Run a visual fix pass based on the visual review feedback
+async function runVisualFixPass(job, plan, prompt, mode, qual, review) {
+  const files = S.cur?.files || {};
+  const fileKeys = Object.keys(files);
+
+  // Gather file contents (focus on HTML + CSS + main JS)
+  let fileContext = '';
+  const BUDGET = 40000;
+  const uiFiles = fileKeys.filter(f => /\.(html|css|jsx|tsx)$/.test(f) || f === 'app.js' || f === 'script.js');
+  const otherFiles = fileKeys.filter(f => !uiFiles.includes(f));
+
+  for (const f of [...uiFiles, ...otherFiles]) {
+    if (!files[f]) continue;
+    const add = '── ' + f + ' ──\n' + files[f] + '\n\n';
+    if (fileContext.length + add.length > BUDGET) break;
+    fileContext += add;
+  }
+
+  const fixSys = `Sei un SENIOR UI/UX DEVELOPER. Il progetto ha FALLITO la visual review (screenshot verificato da AI).
+
+PROBLEMI VISIVI RILEVATI:
+${(review.issues || []).map((i, n) => (n + 1) + '. ' + i).join('\n')}
+
+SUGGERIMENTI DI FIX:
+${(review.fixes || []).map((f, n) => (n + 1) + '. ' + f).join('\n')}
+
+PUNTEGGIO VISIVO: ${review.score}/10 — ${review.summary}
+
+MISSIONE: rendi l'app VISIVAMENTE PROFESSIONALE. Devi:
+- Fixare TUTTI i problemi visivi elencati sopra
+- Usare dark theme (--bg: #0f172a, --surface: #1e293b) o palette colorata coerente
+- Aggiungere Google Fonts, shadows, border-radius, hover states, transitions
+- Se è un gioco: canvas/area di gioco con grafica colorata e tematica, non vuota
+- Se ha bottoni: background colorato, hover effect, padding, border-radius
+- Se ha form/input: bordo, focus glow, placeholder styled
+- Layout strutturato: header/sidebar + main content con spacing consistente
+
+FORMATO OUTPUT — SOLO JSON:
+{"summary":"cosa hai fixato","filesChanged":[{"path":"file","action":"update","content":"CONTENUTO COMPLETO"}]}`;
+
+  const fixMsg = `RICHIESTA UTENTE: "${prompt}"
+SCORE VISIVO: ${review.score}/10
+
+FILE DEL PROGETTO:
+${fileContext}
+
+Correggi TUTTI i problemi visivi. Restituisci i file COMPLETI corretti.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({
+        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.5, stream: true, system: fixSys,
+        messages: [{ role: 'user', content: fixMsg }]
+      })
+    });
+    if (!r.ok) throw new Error('Visual fix API error: ' + r.status);
+    const raw = await readStreamWithProgress(r, 'fix');
+
+    const parsed = parseAIResponse(raw, mode);
+    if (parsed.type === 'json' && parsed.data.filesChanged && parsed.data.filesChanged.length > 0) {
+      saveSnapshot('Pre-visual-fix', job.id);
+      const result = applyJsonPatch(parsed, prompt);
+      saveSnapshot('Post-visual-fix', job.id);
+      addLog('test', '✅', 'Visual Fix', result.changedFiles.length + ' file corretti: ' + result.changedFiles.join(', '));
+      renderBbl('ai', '🎨 **Visual Fix applicato** — ' + result.changedFiles.length + ' file corretti (' + result.totalLines + ' righe)');
+      return true;
+    }
+    return false;
+  } catch(err) {
+    addLog('test', '⚠️', 'Visual Fix', 'Errore: ' + err.message);
+    return false;
+  }
+}
+
+// ══════════════════════════════════
+// RUNTIME FEEDBACK LOOP
+// ══════════════════════════════════
+// Executes the generated HTML in a hidden iframe, captures console errors,
+// uncaught exceptions, and missing DOM elements, then feeds them back
+// to the LLM for surgical fixes. Like Claude Code's "run → see error → fix" loop.
+
+const RUNTIME_MAX_RETRIES = 3;
+
+async function runRuntimeFeedbackLoop(job, plan, prompt, mode, qual) {
+  if (!S.cur?.files) return;
+
+  const htmlFile = S.cur.files['index.html'] || S.cur.files['public/index.html'];
+  if (!htmlFile) return; // only works for static HTML
+
+  addLog('test', '▶', 'Runtime Test', 'Eseguo l\'app in sandbox per catturare errori…');
+  renderBbl('ai', '▶ **Runtime Test** — Eseguo la tua app per trovare bug…');
+
+  for (let attempt = 1; attempt <= RUNTIME_MAX_RETRIES; attempt++) {
+    try {
+      const fullHtml = assembleFullHtml();
+
+      // Execute and capture errors
+      const runtimeResult = await executeAndCapture(fullHtml);
+
+      if (runtimeResult.errors.length === 0 && runtimeResult.warnings.length === 0) {
+        addLog('test', '✅', 'Runtime Test', 'Nessun errore runtime — app funzionante!');
+        renderBbl('ai', '✅ **Runtime Test superato** — nessun errore JavaScript rilevato.');
+        return;
+      }
+
+      // Found errors — report and fix
+      const errorSummary = runtimeResult.errors.map(e => '❌ ' + e).join('\n');
+      const warnSummary = runtimeResult.warnings.map(w => '⚠️ ' + w).join('\n');
+      addLog('test', '🔴', 'Runtime Test',
+        runtimeResult.errors.length + ' errori, ' + runtimeResult.warnings.length + ' warning (tentativo ' + attempt + '/' + RUNTIME_MAX_RETRIES + ')');
+      renderBbl('ai', '🔴 **Runtime Test**: ' + runtimeResult.errors.length + ' errori trovati. Correzione automatica…\n\n' +
+        errorSummary.slice(0, 500));
+
+      // Fix using surgical patch
+      const fixed = await runRuntimeFixPass(job, prompt, mode, qual, runtimeResult);
+      if (!fixed) {
+        addLog('test', '⚠️', 'Runtime Fix', 'Fix non ha prodotto risultati.');
+        if (attempt === RUNTIME_MAX_RETRIES) break;
+        continue;
+      }
+
+      addLog('test', '🔄', 'Runtime Test', 'Fix applicato — ri-eseguo per verificare…');
+
+    } catch(err) {
+      console.warn('Runtime feedback error:', err);
+      addLog('test', '⚠️', 'Runtime Test', 'Errore: ' + err.message);
+      return;
+    }
+  }
+}
+
+// Execute HTML in hidden iframe and capture all errors/warnings
+function executeAndCapture(html) {
+  return new Promise((resolve) => {
+    const errors = [];
+    const warnings = [];
+
+    // Inject error-capturing script at the very start of the HTML
+    const captureScript = `<script>
+(function() {
+  var _errors = [];
+  var _warnings = [];
+
+  // Capture console.error
+  var origError = console.error;
+  console.error = function() {
+    var msg = Array.from(arguments).map(function(a) { return String(a); }).join(' ');
+    _errors.push(msg);
+    origError.apply(console, arguments);
+  };
+
+  // Capture console.warn
+  var origWarn = console.warn;
+  console.warn = function() {
+    var msg = Array.from(arguments).map(function(a) { return String(a); }).join(' ');
+    _warnings.push(msg);
+    origWarn.apply(console, arguments);
+  };
+
+  // Capture uncaught errors
+  window.onerror = function(msg, src, line, col, err) {
+    _errors.push('[Line ' + line + '] ' + msg + (err && err.stack ? '\\n' + err.stack.split('\\n').slice(0,3).join('\\n') : ''));
+    return false;
+  };
+
+  // Capture unhandled promise rejections
+  window.onunhandledrejection = function(e) {
+    _errors.push('[Promise] ' + (e.reason ? (e.reason.message || String(e.reason)) : 'Unhandled rejection'));
+  };
+
+  // After page loads, check for common DOM issues
+  window.addEventListener('load', function() {
+    setTimeout(function() {
+      // Check for onclick handlers referencing undefined functions
+      document.querySelectorAll('[onclick]').forEach(function(el) {
+        var fn = el.getAttribute('onclick').match(/^(\\w+)\\s*\\(/);
+        if (fn && typeof window[fn[1]] === 'undefined') {
+          _errors.push('[DOM] onclick="' + fn[1] + '()" — funzione non definita');
+        }
+      });
+
+      // Check for empty visible containers
+      document.querySelectorAll('main, .container, .content, #app, [role="main"]').forEach(function(el) {
+        if (el.children.length === 0 && el.textContent.trim() === '') {
+          _warnings.push('[DOM] Container "' + (el.id || el.className || el.tagName) + '" è vuoto — nessun contenuto visibile');
+        }
+      });
+
+      // Check if body has almost no visible content
+      if (document.body.innerText.trim().length < 20 && !document.querySelector('canvas')) {
+        _errors.push('[DOM] Pagina quasi vuota — body ha meno di 20 caratteri di testo visibile');
+      }
+
+      // Check for unstyled buttons (browser default)
+      document.querySelectorAll('button').forEach(function(btn) {
+        var style = getComputedStyle(btn);
+        if (style.backgroundColor === 'rgb(239, 239, 239)' || style.backgroundColor === 'buttonface') {
+          _warnings.push('[Style] Bottone "' + (btn.textContent||'').slice(0,30) + '" ha stile browser default — non stilizzato');
+        }
+      });
+
+      // Report back via a custom property
+      window.__forgeErrors = _errors;
+      window.__forgeWarnings = _warnings;
+    }, 800);
+  });
+})();
+<` + '/script>';
+
+    // Inject right after <head> or at start
+    let injectedHtml;
+    if (html.includes('<head>')) {
+      injectedHtml = html.replace('<head>', '<head>' + captureScript);
+    } else if (html.includes('<html')) {
+      injectedHtml = html.replace(/<html[^>]*>/, '$&' + captureScript);
+    } else {
+      injectedHtml = captureScript + html;
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1280px;height:800px;border:none;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+
+    const timeout = setTimeout(() => {
+      // Timeout — collect whatever we have
+      try {
+        const win = iframe.contentWindow;
+        if (win) {
+          errors.push(...(win.__forgeErrors || []));
+          warnings.push(...(win.__forgeWarnings || []));
+        }
+      } catch(e) {}
+      document.body.removeChild(iframe);
+      resolve({ errors: errors.slice(0, 20), warnings: warnings.slice(0, 10) });
+    }, 4000);
+
+    iframe.onload = () => {
+      // Wait for the load event + our 800ms timeout inside the script
+      setTimeout(() => {
+        try {
+          const win = iframe.contentWindow;
+          if (win) {
+            errors.push(...(win.__forgeErrors || []));
+            warnings.push(...(win.__forgeWarnings || []));
+          }
+        } catch(e) {
+          errors.push('[iframe] Cannot access contentWindow: ' + e.message);
+        }
+        clearTimeout(timeout);
+        document.body.removeChild(iframe);
+        resolve({ errors: errors.slice(0, 20), warnings: warnings.slice(0, 10) });
+      }, 1500);
+    };
+
+    iframe.onerror = () => {
+      clearTimeout(timeout);
+      errors.push('[iframe] Failed to load HTML');
+      document.body.removeChild(iframe);
+      resolve({ errors, warnings });
+    };
+
+    iframe.srcdoc = injectedHtml;
+  });
+}
+
+// Fix runtime errors using surgical patches
+async function runRuntimeFixPass(job, prompt, mode, qual, runtimeResult) {
+  const files = S.cur?.files || {};
+  const fileKeys = Object.keys(files);
+
+  // Include full file contents for accurate fixes
+  let fileContext = '';
+  const BUDGET = 50000;
+  for (const f of fileKeys) {
+    if (!files[f]) continue;
+    const add = '── ' + f + ' ──\n' + files[f] + '\n\n';
+    if (fileContext.length + add.length > BUDGET) break;
+    fileContext += add;
+  }
+
+  const errorList = [
+    ...runtimeResult.errors.map(e => '[ERRORE] ' + e),
+    ...runtimeResult.warnings.map(w => '[WARNING] ' + w)
+  ].join('\n');
+
+  const fixSys = `Sei un DEBUGGER ESPERTO. L'app è stata ESEGUITA in un browser e ha prodotto questi ERRORI RUNTIME REALI (non teorici — sono errori effettivi dalla console JavaScript).
+
+ERRORI RUNTIME CATTURATI:
+${errorList}
+
+RICHIESTA UTENTE ORIGINALE: "${prompt}"
+
+MISSIONE: correggi CHIRURGICAMENTE solo le parti di codice che causano questi errori.
+
+REGOLE DI FIX:
+- Usa il formato PATCH per modifiche chirurgiche (vedi sotto)
+- NON riscrivere file interi se il bug è in 5 righe
+- Per ogni errore: identifica la causa ESATTA, modifica SOLO le righe necessarie
+- Se una funzione non è definita → aggiungila
+- Se un ID non esiste → aggiungilo nel markup
+- Se un import è sbagliato → correggi il path
+- Se la pagina è vuota → aggiungi contenuti reali
+
+FORMATO OUTPUT — SOLO JSON:
+{
+  "summary": "cosa hai corretto",
+  "filesChanged": [
+    {
+      "path": "file.ext",
+      "action": "patch",
+      "patches": [
+        {"find": "codice originale esatto da trovare", "replace": "codice corretto sostitutivo"},
+        {"find": "altro codice da fixare", "replace": "fix"}
+      ]
+    }
+  ]
+}
+
+OPPURE per file che devono essere riscritti completamente:
+{
+  "filesChanged": [
+    {"path": "file.ext", "action": "update", "content": "contenuto completo"}
+  ]
+}
+
+Preferisci SEMPRE "patch" a "update" — modifica solo ciò che serve.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': S.key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({
+        model: getModelForAgent('fix'), max_tokens: 32000, temperature: 0.3, stream: true,
+        system: fixSys,
+        messages: [{ role: 'user', content: 'FILE DEL PROGETTO:\n' + fileContext + '\n\nCorreggi gli errori runtime. Usa patch chirurgiche.' }]
+      })
+    });
+    if (!r.ok) throw new Error('Runtime fix API error: ' + r.status);
+    const raw = await readStreamWithProgress(r, 'fix');
+
+    const parsed = parseAIResponse(raw, mode);
+    if (parsed.type === 'json' && parsed.data.filesChanged && parsed.data.filesChanged.length > 0) {
+      saveSnapshot('Pre-runtime-fix', job.id);
+      const result = applyJsonPatchWithSurgical(parsed, prompt);
+      saveSnapshot('Post-runtime-fix', job.id);
+      addLog('test', '✅', 'Runtime Fix', result.changedFiles.length + ' file corretti: ' + result.changedFiles.join(', ') +
+        (result.patchCount > 0 ? ' (' + result.patchCount + ' patch chirurgiche)' : ''));
+      renderBbl('ai', '🔧 **Runtime Fix** — ' + result.changedFiles.length + ' file, ' +
+        result.patchCount + ' patch chirurgiche applicate');
+      return true;
+    }
+    return false;
+  } catch(err) {
+    addLog('test', '⚠️', 'Runtime Fix', 'Errore: ' + err.message);
+    return false;
+  }
+}
+
+// ══════════════════════════════════
+// SURGICAL PATCH SYSTEM
+// ══════════════════════════════════
+// Applies both full file updates and surgical find/replace patches.
+// Like Claude Code's Edit tool — only changes what's needed.
+
+function applyJsonPatchWithSurgical(parsed, prompt) {
+  const result = { changedFiles: [], totalLines: 0, patchCount: 0 };
+
+  if (parsed.type !== 'json' || !parsed.data.filesChanged) {
+    return applyJsonPatch(parsed, prompt);
+  }
+
+  const { filesChanged, summary, nextBatch } = parsed.data;
+  for (const fc of filesChanged) {
+    if (!fc.path) continue;
+
+    if (fc.action === 'patch' && fc.patches && Array.isArray(fc.patches)) {
+      // ── SURGICAL PATCH MODE ──
+      let content = S.cur.files[fc.path] || '';
+      let patchesApplied = 0;
+
+      for (const patch of fc.patches) {
+        if (!patch.find || patch.replace === undefined) continue;
+
+        if (content.includes(patch.find)) {
+          content = content.replace(patch.find, patch.replace);
+          patchesApplied++;
+        } else {
+          // Try fuzzy match: trim whitespace differences
+          const findTrimmed = patch.find.replace(/\s+/g, ' ').trim();
+          const lines = content.split('\n');
+          let found = false;
+          for (let i = 0; i < lines.length; i++) {
+            // Check if the find string spans multiple lines starting at this line
+            for (let span = 1; span <= Math.min(20, lines.length - i); span++) {
+              const segment = lines.slice(i, i + span).join('\n');
+              if (segment.replace(/\s+/g, ' ').trim() === findTrimmed) {
+                // Found it with whitespace normalization
+                const before = lines.slice(0, i).join('\n');
+                const after = lines.slice(i + span).join('\n');
+                content = before + (before ? '\n' : '') + patch.replace + (after ? '\n' : '') + after;
+                patchesApplied++;
+                found = true;
+                break;
+              }
+            }
+            if (found) break;
+          }
+          if (!found) {
+            console.warn('[Surgical] Patch not found in ' + fc.path + ':', patch.find.slice(0, 80));
+            // If patch.replace looks like it should be appended (new function/code), append it
+            if (patch.find.includes('// APPEND') || patch.find.includes('/* ADD */')) {
+              content += '\n' + patch.replace;
+              patchesApplied++;
+            }
+          }
+        }
+      }
+
+      if (patchesApplied > 0) {
+        S.cur.files[fc.path] = content;
+        result.changedFiles.push(fc.path);
+        result.totalLines += content.split('\n').length;
+        result.patchCount += patchesApplied;
+      }
+    } else if (fc.content) {
+      // ── FULL FILE MODE (create or update) ──
+      S.cur.files[fc.path] = fc.content;
+      result.changedFiles.push(fc.path);
+      result.totalLines += fc.content.split('\n').length;
+    }
+  }
+
+  result.summary = summary || '';
+  result.nextBatch = nextBatch || { needed: false };
+
+  // Update project
+  S.cur.conv = S.history;
+  save();
+  updateFileTabs(); updateFilesList();
+  if (result.changedFiles.length) showFile(result.changedFiles[0]);
+  document.getElementById('deploy-btn').style.display = 'flex';
+
+  // Preview
+  if (!needsBuild()) {
+    const htmlFile = S.cur.files['index.html'] || S.cur.files['public/index.html'];
+    if (htmlFile) updatePrev(htmlFile);
+  }
+
+  return result;
 }
 
 
