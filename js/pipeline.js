@@ -299,8 +299,10 @@ function runFunctionalChecks(files, fileKeys, allContent) {
 // ── UI BASELINE CHECK (modern visual quality) ──
 function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
   const issues = [];
-  const wantsModern = needsModernUI(prompt);
-  if (!wantsModern) return issues; // Skip for simple requests
+  // v2: Always run UI checks for multi-file projects (not just when keywords match)
+  const isMultiFile = fileKeys.length >= 3;
+  const wantsModern = needsModernUI(prompt) || isMultiFile;
+  if (!wantsModern) return issues;
 
   // Gather all CSS (inline <style> + .css files)
   const cssBlocks = (allContent.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || []).map(m => m.replace(/<\/?style[^>]*>/gi, ''));
@@ -308,34 +310,37 @@ function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
   const allCss = [...cssBlocks, ...cssFileContents].join('\n');
   const cssLines = allCss.split('\n').filter(l => l.trim()).length;
 
-  // 1. CSS quantity baseline
-  const markupLines = fileKeys.filter(f => /\.(html|jsx|tsx|vue)$/.test(f))
-    .reduce((sum, f) => sum + (files[f] || '').split('\n').length, 0);
-  if (cssLines < 25 && markupLines > 40) {
+  // Gather all HTML markup
+  const allMarkup = fileKeys.filter(f => /\.(html|jsx|tsx|vue)$/.test(f)).map(f => files[f] || '').join('\n');
+  const markupLines = allMarkup.split('\n').length;
+
+  // 1. CSS quantity baseline — STRICTER: min 50 lines for complex, 30 for simple
+  const minCss = isComplexRequest(prompt) ? 50 : 30;
+  if (cssLines < minCss && markupLines > 40) {
     issues.push({ severity: 'high', type: 'UI_TOO_BASIC',
-      message: 'Solo ' + cssLines + ' righe CSS per ' + markupLines + ' righe di markup. UI troppo basilare per una richiesta moderna.' });
+      message: 'Solo ' + cssLines + ' righe CSS per ' + markupLines + ' righe di markup (minimo ' + minCss + ' per questa complessità). UI troppo basilare.' });
   }
 
-  // 2. Background check — no raw white default
+  // 2. Background check — no raw white default — PROMOTED TO HIGH
   const hasBgColor = /background(?:-color)?\s*:\s*(?!(?:#fff(?:fff)?|white|rgba?\(255))/i.test(allCss);
   const hasBgGradient = /background.*gradient/i.test(allCss);
   const hasBodyBg = /body\s*\{[^}]*background/i.test(allCss);
   const hasCSSVarBg = /--.*(?:bg|background)/i.test(allCss);
   if (!hasBgColor && !hasBgGradient && !hasBodyBg && !hasCSSVarBg && cssLines > 0) {
     issues.push({ severity: 'high', type: 'STYLING_INSUFFICIENT',
-      message: 'Nessun background definito — sfondo bianco grezzo di default. Serve una palette colori.' });
+      message: 'Nessun background definito — sfondo bianco grezzo di default. Serve palette colori scura (--bg).' });
   }
 
-  // 3. Typography — font-family beyond defaults
+  // 3. Typography — font-family beyond defaults — PROMOTED TO HIGH
   const hasCustomFont = /font-family\s*:\s*(?!.*(?:serif|sans-serif|monospace|inherit|initial|unset)\s*[;}])/i.test(allCss);
   const hasGoogleFont = /@import.*fonts\.googleapis|link.*fonts\.googleapis/i.test(allContent);
   const hasFontVar = /--.*font/i.test(allCss);
   if (!hasCustomFont && !hasGoogleFont && !hasFontVar) {
-    issues.push({ severity: 'medium', type: 'STYLING_INSUFFICIENT',
-      message: 'Nessun font custom caricato. Serve Google Fonts o font-family curata per UI moderna.' });
+    issues.push({ severity: 'high', type: 'STYLING_INSUFFICIENT',
+      message: 'Nessun font custom caricato. Serve Google Fonts (Inter, Poppins) per UI moderna.' });
   }
 
-  // 4. Visual hierarchy — must have some shadows, border-radius, or visual depth
+  // 4. Visual hierarchy — must have shadows + border-radius + transitions (ALL THREE for modern UI)
   const hasShadow = /box-shadow/i.test(allCss);
   const hasBorderRadius = /border-radius\s*:\s*(?!0)/i.test(allCss);
   const hasTransition = /transition/i.test(allCss);
@@ -343,17 +348,18 @@ function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
   if (visualDepthCount === 0) {
     issues.push({ severity: 'high', type: 'MODERN_UI_REQUIREMENTS_NOT_MET',
       message: 'Nessun box-shadow, border-radius o transition. UI piatta/prototipale.' });
-  } else if (visualDepthCount === 1 && cssLines < 60) {
-    issues.push({ severity: 'medium', type: 'MODERN_UI_REQUIREMENTS_NOT_MET',
-      message: 'Profondità visiva minima (solo ' + visualDepthCount + '/3 tra shadow, radius, transition). UI probabilmente poco curata.' });
+  } else if (visualDepthCount <= 1) {
+    // PROMOTED: even 1/3 is now high severity for complex apps
+    issues.push({ severity: isComplexRequest(prompt) ? 'high' : 'medium', type: 'MODERN_UI_REQUIREMENTS_NOT_MET',
+      message: 'Profondità visiva insufficiente (solo ' + visualDepthCount + '/3 tra shadow, radius, transition). Serve design più ricco.' });
   }
 
-  // 5. Interactive states — hover/focus/active
+  // 5. Interactive states — hover/focus/active — PROMOTED TO HIGH for complex
   const hasHover = /:hover/i.test(allCss);
   const hasFocus = /:focus/i.test(allCss);
   if (!hasHover && !hasFocus) {
-    issues.push({ severity: 'medium', type: 'STYLING_INSUFFICIENT',
-      message: 'Nessuno stato :hover o :focus definito. Interazioni piatte.' });
+    issues.push({ severity: isComplexRequest(prompt) ? 'high' : 'medium', type: 'STYLING_INSUFFICIENT',
+      message: 'Nessuno stato :hover o :focus. Ogni elemento interattivo DEVE avere hover state.' });
   }
 
   // 6. Responsive — media queries or flex/grid layout
@@ -365,20 +371,47 @@ function runUIBaselineCheck(files, fileKeys, allContent, prompt) {
       message: 'Nessun layout flex/grid né media query. UI non responsive.' });
   }
 
-  // 7. CSS custom properties / design tokens (for complex projects)
-  if (isComplexRequest(prompt)) {
+  // 7. CSS custom properties / design tokens — REQUIRED for all complex projects (HIGH)
+  if (isComplexRequest(prompt) || isMultiFile) {
     const hasCssVars = /--[\w-]+\s*:/i.test(allCss);
-    if (!hasCssVars && cssLines > 30) {
-      issues.push({ severity: 'medium', type: 'STYLING_INSUFFICIENT',
-        message: 'Nessuna CSS custom property (design tokens). Palette non sistematica.' });
+    if (!hasCssVars) {
+      issues.push({ severity: 'high', type: 'STYLING_INSUFFICIENT',
+        message: 'Nessuna CSS custom property (design tokens). Palette coerente OBBLIGATORIA per app multi-file.' });
     }
   }
 
-  // 8. Buttons/inputs styling
+  // 8. Buttons/inputs styling — PROMOTED TO HIGH
   const hasButtonStyle = /button|\.btn|input\[type/i.test(allCss);
   if (!hasButtonStyle && /(<button|<input)/i.test(allContent)) {
-    issues.push({ severity: 'medium', type: 'STYLING_INSUFFICIENT',
-      message: 'Bottoni/input presenti nel markup ma non stilizzati nel CSS.' });
+    issues.push({ severity: 'high', type: 'STYLING_INSUFFICIENT',
+      message: 'Bottoni/input presenti nel markup ma non stilizzati nel CSS. Servono padding, border-radius, colore.' });
+  }
+
+  // 9. NEW: CSS DOM coverage — check that HTML classes used in markup are defined in CSS
+  const classesInMarkup = new Set([...(allMarkup.matchAll(/class\s*=\s*["']([^"']+)["']/gi) || [])].flatMap(m => m[1].split(/\s+/)));
+  const classesInCss = new Set([...(allCss.matchAll(/\.([a-zA-Z][\w-]*)/g) || [])].map(m => m[1]));
+  const uncoveredClasses = [...classesInMarkup].filter(c => !classesInCss.has(c) && c.length > 1);
+  // Exclude framework/utility classes that don't need explicit definition
+  const frameworkClasses = /^(active|show|hidden|open|closed|disabled|selected|checked|error|loading|fade|slide|collapse)/;
+  const reallyUncovered = uncoveredClasses.filter(c => !frameworkClasses.test(c));
+  if (reallyUncovered.length > 5 && markupLines > 30) {
+    issues.push({ severity: 'high', type: 'CSS_DOM_COVERAGE_GAP',
+      message: reallyUncovered.length + ' classi CSS usate in HTML ma mai definite nel CSS: ' + reallyUncovered.slice(0, 8).map(c => '.' + c).join(', ') + (reallyUncovered.length > 8 ? '…' : '') + '. Ogni classe deve avere styling.' });
+  } else if (reallyUncovered.length > 2) {
+    issues.push({ severity: 'medium', type: 'CSS_DOM_COVERAGE_GAP',
+      message: reallyUncovered.length + ' classi HTML senza styling CSS: ' + reallyUncovered.slice(0, 5).map(c => '.' + c).join(', ') });
+  }
+
+  // 10. NEW: Main file size check — complex apps need substantial main files
+  if (isComplexRequest(prompt)) {
+    const mainFiles = fileKeys.filter(f => /^(index\.html|src\/App\.(jsx|tsx)|app\/page\.(jsx|tsx))$/.test(f));
+    for (const mf of mainFiles) {
+      const lines = (files[mf] || '').split('\n').length;
+      if (lines < 50) {
+        issues.push({ severity: 'high', type: 'SKELETON_UI',
+          message: 'File principale "' + mf + '" ha solo ' + lines + ' righe — troppo corto per app complessa (minimo 50).' });
+      }
+    }
   }
 
   return issues;
@@ -510,7 +543,7 @@ async function runQualityFixPass(job, plan, prompt, mode, qual, qReport) {
 
   // Identify which files need fixing (mentioned in issues + CSS/UI files for visual issues)
   const issueFiles = new Set();
-  const hasUIIssues = qReport.issues.some(i => ['UI_TOO_BASIC','STYLING_INSUFFICIENT','MODERN_UI_REQUIREMENTS_NOT_MET'].includes(i.type));
+  const hasUIIssues = qReport.issues.some(i => ['UI_TOO_BASIC','STYLING_INSUFFICIENT','MODERN_UI_REQUIREMENTS_NOT_MET','CSS_DOM_COVERAGE_GAP','SKELETON_UI'].includes(i.type));
   const hasFuncIssues = qReport.issues.some(i => ['MISSING_HANDLER','MISSING_DOM_ELEMENT','BROKEN_IMPORT','MISSING_ASSET','SCRIPT_LOAD_ORDER','EMPTY_FUNCTIONS'].includes(i.type));
 
   for (const iss of qReport.issues) {
@@ -555,7 +588,9 @@ CORREZIONE UI OBBLIGATORIA — il progetto ha styling insufficiente. Devi:
 - Layout con flex/grid, gap consistente
 - Transizioni smooth (0.2-0.3s ease)
 - Media query per mobile (max-width: 768px)
-- Se è dashboard/app: sidebar con bg scuro, main con bg leggermente diverso, stat cards visive` : '';
+- Se è dashboard/app: sidebar con bg scuro, main con bg leggermente diverso, stat cards visive
+- OGNI classe CSS usata nell'HTML DEVE avere uno stile definito nel CSS. Zero classi orfane.
+- File principali (index.html, App.jsx) devono avere almeno 50+ righe per app complesse` : '';
 
   const funcFixBlock = hasFuncIssues ? `
 CORREZIONE FUNZIONALE OBBLIGATORIA — ci sono bug strutturali. Devi:

@@ -521,28 +521,357 @@ function validateGenerationVsPlan(parsed, plan) {
 
 // Get scaffold files for a given project type
 function getScaffoldFiles(projectType) {
+  // ═══════════════════════════════════════════════════════════════
+  // RICH SCAFFOLDS — real app foundations the AI will EXTEND
+  // Each scaffold provides a functional starting point with:
+  // - Complete design system (CSS vars, dark theme, components)
+  // - Real layout structure (sidebar, toolbar, content grid)
+  // - JS app skeleton (state, init, render, utilities)
+  // ═══════════════════════════════════════════════════════════════
+
+  const DESIGN_SYSTEM_CSS = `@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --primary:#6366f1;--primary-hover:#4f46e5;
+  --bg:#0f172a;--bg-alt:#0b1120;
+  --surface:#1e293b;--surface-hover:#334155;
+  --border:#334155;--border-light:rgba(255,255,255,0.06);
+  --text:#f1f5f9;--text-muted:#94a3b8;--text-dim:#64748b;
+  --success:#10b981;--warning:#f59e0b;--danger:#ef4444;
+  --radius:12px;--radius-sm:8px;--radius-lg:16px;
+  --shadow:0 4px 24px rgba(0,0,0,0.3);--shadow-sm:0 2px 8px rgba(0,0,0,0.2);
+  --transition:0.2s ease;
+}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.6}
+#app{display:flex;min-height:100vh}
+.sidebar{width:260px;background:var(--bg-alt);border-right:1px solid var(--border);padding:1.5rem;display:flex;flex-direction:column;gap:0.5rem;position:fixed;top:0;left:0;bottom:0;overflow-y:auto}
+.sidebar .logo{font-size:1.25rem;font-weight:700;padding:0.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:0.5rem}
+.sidebar .nav-item{padding:0.6rem 0.8rem;border-radius:var(--radius-sm);color:var(--text-muted);cursor:pointer;transition:all var(--transition);display:flex;align-items:center;gap:0.6rem;font-size:0.9rem;font-weight:500}
+.sidebar .nav-item:hover,.sidebar .nav-item.active{background:var(--surface);color:var(--text)}
+.main-content{margin-left:260px;flex:1;padding:2rem;display:flex;flex-direction:column;gap:1.5rem}
+.toolbar{display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.toolbar h1{font-size:1.5rem;font-weight:700}
+.toolbar .actions{display:flex;gap:0.5rem}
+.content-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
+.card{background:var(--surface);border:1px solid var(--border-light);border-radius:var(--radius);padding:1.25rem;transition:all var(--transition);cursor:pointer}
+.card:hover{transform:translateY(-2px);box-shadow:var(--shadow);border-color:var(--border)}
+.card .card-title{font-weight:600;margin-bottom:0.5rem}
+.card .card-desc{color:var(--text-muted);font-size:0.875rem;line-height:1.5}
+.card .card-meta{display:flex;align-items:center;gap:0.5rem;margin-top:0.75rem;font-size:0.8rem;color:var(--text-dim)}
+.btn{padding:0.55rem 1.1rem;border:none;border-radius:var(--radius-sm);font-weight:600;font-size:0.875rem;cursor:pointer;transition:all var(--transition);display:inline-flex;align-items:center;gap:0.4rem}
+.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-hover);transform:translateY(-1px)}
+.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--surface-hover)}
+.btn-danger{background:rgba(239,68,68,0.15);color:var(--danger)}.btn-danger:hover{background:rgba(239,68,68,0.25)}
+.input,.search-input{padding:0.55rem 0.9rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-size:0.875rem;outline:none;transition:border var(--transition);width:100%}
+.input:focus,.search-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(99,102,241,0.15)}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:opacity 0.2s}
+.modal-overlay.active{opacity:1;pointer-events:all}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.5rem;width:90%;max-width:480px;box-shadow:0 25px 60px rgba(0,0,0,0.4)}
+.modal h2{font-size:1.2rem;margin-bottom:1rem}
+.modal .modal-actions{display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1.25rem}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:var(--radius-sm);color:#fff;font-weight:500;font-size:0.875rem;z-index:2000;transform:translateY(20px);opacity:0;transition:all 0.3s ease;pointer-events:none}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.success{background:var(--success)}.toast.error{background:var(--danger)}.toast.warning{background:var(--warning)}
+.empty-state{text-align:center;padding:3rem 1rem;color:var(--text-dim)}
+.empty-state .empty-icon{font-size:3rem;margin-bottom:1rem;opacity:0.5}
+.badge{display:inline-flex;align-items:center;padding:0.2rem 0.6rem;border-radius:99px;font-size:0.75rem;font-weight:600}
+.badge-primary{background:rgba(99,102,241,0.15);color:var(--primary)}
+.badge-success{background:rgba(16,185,129,0.15);color:var(--success)}
+@media(max-width:768px){
+  .sidebar{display:none}
+  .main-content{margin-left:0;padding:1rem}
+  .content-grid{grid-template-columns:1fr}
+  .toolbar{flex-direction:column;align-items:stretch}
+}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.card{animation:fadeIn 0.3s ease both}
+.card:nth-child(2){animation-delay:0.05s}.card:nth-child(3){animation-delay:0.1s}.card:nth-child(4){animation-delay:0.15s}`;
+
+  const SCAFFOLD_HTML_STATIC = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>App</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="logo"><!-- APP LOGO --></div>
+    <nav id="nav-list">
+      <div class="nav-item active">Home</div>
+    </nav>
+  </aside>
+  <main class="main-content">
+    <header class="toolbar">
+      <h1>Dashboard</h1>
+      <div class="actions">
+        <input class="search-input" placeholder="Search..." id="searchInput" style="width:220px">
+        <button class="btn btn-primary" id="addBtn">+ New</button>
+      </div>
+    </header>
+    <section class="content-grid" id="contentGrid">
+      <!-- Cards rendered by JS -->
+    </section>
+  </main>
+</div>
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h2 id="modalTitle">New Item</h2>
+    <div id="modalBody"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modalConfirm">Save</button>
+    </div>
+  </div>
+</div>
+<script src="app.js"><\/script>
+</body>
+</html>`;
+
+  const SCAFFOLD_JS = `document.addEventListener('DOMContentLoaded', () => {
+  initApp();
+});
+
+// ── State ──
+let state = { items: [], filter: 'all' };
+
+function initApp() {
+  bindEvents();
+  render();
+}
+
+function bindEvents() {
+  document.getElementById('addBtn')?.addEventListener('click', () => openModal());
+  document.getElementById('searchInput')?.addEventListener('input', (e) => {
+    state.filter = e.target.value.trim().toLowerCase();
+    render();
+  });
+}
+
+function render() {
+  const grid = document.getElementById('contentGrid');
+  if (!grid) return;
+  const filtered = state.items.filter(item =>
+    state.filter === 'all' || !state.filter || (item.title || '').toLowerCase().includes(state.filter)
+  );
+  if (filtered.length === 0) {
+    grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📭</div><p>No items yet. Click "+ New" to add one.</p></div>';
+    return;
+  }
+  grid.innerHTML = filtered.map((item, i) =>
+    '<div class="card" data-id="' + i + '">' +
+      '<div class="card-title">' + (item.title || 'Untitled') + '</div>' +
+      '<div class="card-desc">' + (item.description || '') + '</div>' +
+      '<div class="card-meta"><span class="badge badge-primary">' + (item.category || 'General') + '</span></div>' +
+    '</div>'
+  ).join('');
+}
+
+// ── Modal ──
+function openModal() {
+  document.getElementById('modalOverlay')?.classList.add('active');
+}
+function closeModal() {
+  document.getElementById('modalOverlay')?.classList.remove('active');
+}
+
+// ── Toast ──
+function showToast(message, type) {
+  type = type || 'success';
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 2500);
+}
+
+function $(sel) { return document.querySelector(sel); }
+function $$(sel) { return document.querySelectorAll(sel); }`;
+
   const scaffolds = {
     'vite-react': {
       'package.json': '{\n  "name": "forge-app",\n  "version": "1.0.0",\n  "private": true,\n  "type": "module",\n  "scripts": {\n    "dev": "vite",\n    "build": "vite build",\n    "preview": "vite preview"\n  },\n  "dependencies": {\n    "react": "^18.2.0",\n    "react-dom": "^18.2.0"\n  },\n  "devDependencies": {\n    "@vitejs/plugin-react": "^4.0.0",\n    "vite": "^5.0.0"\n  }\n}',
       'vite.config.js': 'import { defineConfig } from "vite";\nimport react from "@vitejs/plugin-react";\nexport default defineConfig({ plugins: [react()] });\n',
       'index.html': '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8" />\n<meta name="viewport" content="width=device-width, initial-scale=1.0" />\n<title>App</title>\n</head>\n<body>\n<div id="root"></div>\n<script type="module" src="/src/main.jsx"><\/script>\n</body>\n</html>',
-      'src/main.jsx': 'import React from "react";\nimport ReactDOM from "react-dom/client";\nimport App from "./App.jsx";\nReactDOM.createRoot(document.getElementById("root")).render(<React.StrictMode><App /></React.StrictMode>);\n',
-      'src/App.jsx': 'export default function App() {\n  return <div style={{padding:"2rem",textAlign:"center"}}><h1>Loading...</h1><p>Forge is building your app</p></div>;\n}\n'
+      'src/main.jsx': 'import React from "react";\nimport ReactDOM from "react-dom/client";\nimport App from "./App.jsx";\nimport "./App.css";\nReactDOM.createRoot(document.getElementById("root")).render(<React.StrictMode><App /></React.StrictMode>);\n',
+      'src/App.jsx': `import { useState } from "react";
+
+export default function App() {
+  const [items, setItems] = useState([]);
+  const [search, setSearch] = useState("");
+
+  const filtered = items.filter(item =>
+    !search || item.title.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="app-layout">
+      <aside className="sidebar">
+        <div className="logo">App</div>
+        <nav>
+          <div className="nav-item active">Home</div>
+        </nav>
+      </aside>
+      <main className="main-content">
+        <header className="toolbar">
+          <h1>Dashboard</h1>
+          <div className="actions">
+            <input
+              className="search-input"
+              placeholder="Search..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{width: 220}}
+            />
+            <button className="btn btn-primary">+ New</button>
+          </div>
+        </header>
+        <section className="content-grid">
+          {filtered.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-icon">📭</div>
+              <p>No items yet. Click "+ New" to add one.</p>
+            </div>
+          ) : filtered.map((item, i) => (
+            <div className="card" key={i}>
+              <div className="card-title">{item.title}</div>
+              <div className="card-desc">{item.description}</div>
+              <div className="card-meta">
+                <span className="badge badge-primary">{item.category || "General"}</span>
+              </div>
+            </div>
+          ))}
+        </section>
+      </main>
+    </div>
+  );
+}
+`,
+      'src/App.css': DESIGN_SYSTEM_CSS.replace('#app{', '.app-layout{')
     },
     'node-express': {
       'package.json': '{\n  "name": "forge-app",\n  "version": "1.0.0",\n  "main": "server.js",\n  "scripts": {\n    "start": "node server.js",\n    "dev": "node server.js"\n  },\n  "dependencies": {\n    "express": "^4.18.0",\n    "cors": "^2.8.5"\n  }\n}',
       'server.js': 'const express = require("express");\nconst cors = require("cors");\nconst app = express();\napp.use(cors());\napp.use(express.json());\napp.use(express.static("public"));\napp.get("/api/health", (req,res) => res.json({status:"ok"}));\nconst PORT = process.env.PORT || 5000;\napp.listen(PORT, () => console.log("Server on port " + PORT));\n',
-      'public/index.html': '<!DOCTYPE html>\n<html lang="en">\n<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>App</title>\n<style>body{font-family:system-ui;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}</style>\n</head>\n<body><h1>Loading...</h1>\n<\/body>\n</html>'
+      'public/index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>App</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{--primary:#6366f1;--primary-hover:#4f46e5;--bg:#0f172a;--surface:#1e293b;--surface-hover:#334155;--border:#334155;--text:#f1f5f9;--text-muted:#94a3b8;--success:#10b981;--danger:#ef4444;--radius:12px;--shadow:0 4px 24px rgba(0,0,0,0.3);--transition:0.2s ease}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:2rem;max-width:800px;margin:0 auto;line-height:1.6}
+h1{font-size:1.8rem;font-weight:700;margin-bottom:1.5rem}
+.card{background:var(--surface);border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius);padding:1.25rem;margin-bottom:0.75rem;transition:all var(--transition)}
+.card:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.btn{padding:0.55rem 1.1rem;border:none;border-radius:8px;font-weight:600;font-size:0.875rem;cursor:pointer;transition:all var(--transition);display:inline-flex;align-items:center;gap:0.4rem}
+.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-hover)}
+.btn-danger{background:rgba(239,68,68,0.15);color:var(--danger)}.btn-danger:hover{background:rgba(239,68,68,0.25)}
+input,textarea{padding:0.55rem 0.9rem;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:0.875rem;outline:none;transition:border var(--transition);width:100%}
+input:focus,textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(99,102,241,0.15)}
+.add-form{display:flex;gap:0.5rem;margin-bottom:1.5rem}
+.add-form input{flex:1}
+.empty-state{text-align:center;padding:3rem;color:var(--text-muted)}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:8px;color:#fff;font-weight:500;z-index:2000;transform:translateY(20px);opacity:0;transition:all 0.3s}
+.toast.show{transform:translateY(0);opacity:1}.toast.success{background:var(--success)}.toast.error{background:var(--danger)}
+@media(max-width:768px){body{padding:1rem}}
+</style>
+</head>
+<body>
+<h1>App</h1>
+<div class="add-form">
+  <input id="inp" placeholder="New item...">
+  <button class="btn btn-primary" onclick="addItem()">Add</button>
+</div>
+<div id="items"></div>
+<script>
+const API = "";
+async function load() {
+  try {
+    const res = await fetch(API + "/api/items");
+    const items = await res.json();
+    const el = document.getElementById("items");
+    if (!items.length) { el.innerHTML = '<div class="empty-state">No items yet</div>'; return; }
+    el.innerHTML = items.map(i =>
+      '<div class="card"><span>' + i.name + '</span> ' +
+      '<button class="btn btn-danger" onclick="del(' + i.id + ')">Delete</button></div>'
+    ).join("");
+  } catch(e) { console.error("Load error:", e); }
+}
+async function addItem() {
+  const inp = document.getElementById("inp");
+  if (!inp.value.trim()) return;
+  await fetch(API + "/api/items", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:inp.value.trim()}) });
+  inp.value = ""; load();
+}
+async function del(id) { await fetch(API + "/api/items/" + id, { method:"DELETE" }); load(); }
+load();
+<\/script>
+</body>
+</html>`
     },
     'static': {
-      'index.html': '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<title>App</title>\n<link rel="stylesheet" href="style.css">\n</head>\n<body>\n<div id="app"><h1>Loading...</h1></div>\n<script src="app.js"><\/script>\n</body>\n</html>',
-      'style.css': '*{margin:0;padding:0;box-sizing:border-box}\n:root{--bg:#0a0a0a;--text:#fff;--accent:#FF9F1C}\nbody{font-family:system-ui;background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center}\n#app{text-align:center;padding:2rem}\n',
-      'app.js': '// App logic — will be replaced by AI generation\ndocument.addEventListener("DOMContentLoaded", () => {\n  console.log("Scaffold ready");\n});\n'
+      'index.html': SCAFFOLD_HTML_STATIC,
+      'style.css': DESIGN_SYSTEM_CSS,
+      'app.js': SCAFFOLD_JS
     },
     'nextjs': {
       'package.json': '{\n  "name": "forge-app",\n  "version": "1.0.0",\n  "private": true,\n  "scripts": {\n    "dev": "next dev",\n    "build": "next build",\n    "start": "next start"\n  },\n  "dependencies": {\n    "next": "^14.0.0",\n    "react": "^18.2.0",\n    "react-dom": "^18.2.0"\n  }\n}',
-      'app/page.jsx': 'export default function Home() {\n  return <main style={{padding:"2rem",textAlign:"center"}}><h1>Loading...</h1><p>Forge is building your app</p></main>;\n}\n',
-      'app/layout.jsx': 'export const metadata = { title: "Forge App" };\nexport default function RootLayout({ children }) {\n  return <html lang="en"><body>{children}</body></html>;\n}\n'
+      'app/page.jsx': `"use client";
+import { useState } from "react";
+
+export default function Home() {
+  const [items, setItems] = useState([]);
+  const [search, setSearch] = useState("");
+
+  const filtered = items.filter(item =>
+    !search || item.title.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="app-layout">
+      <aside className="sidebar">
+        <div className="logo">App</div>
+        <nav>
+          <div className="nav-item active">Home</div>
+        </nav>
+      </aside>
+      <main className="main-content">
+        <header className="toolbar">
+          <h1>Dashboard</h1>
+          <div className="actions">
+            <input className="search-input" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} style={{width: 220}} />
+            <button className="btn btn-primary">+ New</button>
+          </div>
+        </header>
+        <section className="content-grid">
+          {filtered.length === 0 ? (
+            <div className="empty-state"><div className="empty-icon">📭</div><p>No items yet</p></div>
+          ) : filtered.map((item, i) => (
+            <div className="card" key={i}>
+              <div className="card-title">{item.title}</div>
+              <div className="card-desc">{item.description}</div>
+            </div>
+          ))}
+        </section>
+      </main>
+    </div>
+  );
+}
+`,
+      'app/layout.jsx': `import "./globals.css";
+export const metadata = { title: "Forge App" };
+export default function RootLayout({ children }) {
+  return <html lang="en"><body>{children}</body></html>;
+}
+`,
+      'app/globals.css': DESIGN_SYSTEM_CSS.replace('#app{', '.app-layout{')
     }
   };
 
@@ -653,10 +982,13 @@ function buildBatchPrompt(userGoal, plan, targetFiles, batchNum, totalBatches, c
     ? `\nSTILE OBBLIGATORIO: CSS vars (--primary, --bg, --surface, --text), sfondo scuro (MAI #fff), Google Fonts Inter, border-radius 12px, box-shadow, hover/focus states, flex/grid layout, @media (max-width:768px). Vedi la baseline CSS nel system prompt.\n`
     : `\nRICORDA: usa le CSS classes e gli ID già definiti nel progetto (vedi interface contract). Ogni handler JS deve corrispondere a un elemento reale.\n`;
 
+  const batchLayer = getFileLayer(targetFiles[0]);
+  const layerLabel = {layout:'LAYOUT (struttura + design)', logic:'LOGICA (funzionalità + interazioni)', integration:'INTEGRAZIONE (config + utility)'}[batchLayer] || 'GENERAZIONE';
+
   return `${userGoal}
 
 CONTESTO: Stai generando file per un progetto esistente.
-Batch ${batchNum}/${totalBatches}. File già nel progetto: ${existingFileList}
+Batch ${batchNum}/${totalBatches} — Fase: ${layerLabel}. File già nel progetto: ${existingFileList}
 ${summary ? '\n' + summary + '\n' : ''}${contextPack ? '\n' + contextPack + '\n' : ''}
 IN QUESTO BATCH genera SOLO questi file (${targetFiles.length}):
 ${targetFiles.map(f => '- ' + f).join('\n')}
@@ -667,6 +999,59 @@ ${styleReminder}
 I file devono essere COMPLETI e FUNZIONANTI, integrandosi con i file già esistenti nel progetto.
 Non rigenerare file già creati — genera SOLO quelli elencati sopra.
 Ogni funzione deve avere un corpo reale. Nessun TODO, placeholder, o corpo vuoto.`;
+}
+
+// Classify a file into a responsibility layer
+function getFileLayer(f) {
+  const lower = f.toLowerCase();
+  if (/\.(css|scss|sass|less)$/.test(f)) return 'layout';
+  if (/\.html$/.test(f)) return 'layout';
+  if (/layout\.|page\.|App\./i.test(f)) return 'layout';
+  if (/\.(js|jsx|tsx|ts)$/.test(f) && !/config|\.test|\.spec|util/.test(lower)) return 'logic';
+  return 'integration';
+}
+
+// Sort pending files by responsibility layer: layout → logic → integration
+function sortFilesByResponsibility(pending) {
+  const layers = {
+    layout: [],    // .html, .css, .scss, layout/page components
+    logic: [],     // .js, .jsx, .tsx (non-style, non-config)
+    integration: [] // config, utils, tests, everything else
+  };
+
+  for (const f of pending) {
+    const lower = f.toLowerCase();
+    if (/\.(css|scss|sass|less)$/.test(f) || /globals?\.(css|scss)/.test(f)) {
+      layers.layout.push(f);
+    } else if (/index\.html$|\.html$/.test(f) && !f.includes('public/')) {
+      layers.layout.push(f);
+    } else if (/layout\.(jsx|tsx)$|page\.(jsx|tsx)$|App\.(jsx|tsx|css)$/.test(f)) {
+      layers.layout.push(f);
+    } else if (/public\/.*\.html$/.test(f)) {
+      layers.layout.push(f);
+    } else if (/\.(js|jsx|tsx|ts)$/.test(f) && !/config|\.test|\.spec|util/.test(lower)) {
+      layers.logic.push(f);
+    } else {
+      layers.integration.push(f);
+    }
+  }
+
+  return [...layers.layout, ...layers.logic, ...layers.integration];
+}
+
+// Pick batch files keeping same-layer files together when possible
+function pickBatchFiles(sortedFiles, batchSize) {
+  if (sortedFiles.length <= batchSize) return sortedFiles;
+
+  const first = sortedFiles[0];
+  const firstLayer = getFileLayer(first);
+
+  // Try to fill batch with files from the same layer
+  const sameLayer = sortedFiles.filter(f => getFileLayer(f) === firstLayer);
+  if (sameLayer.length >= batchSize) return sameLayer.slice(0, batchSize);
+
+  // If not enough files in same layer, take all from this layer + start next
+  return sortedFiles.slice(0, batchSize);
 }
 
 // Main batched generation loop
@@ -694,7 +1079,8 @@ async function runBatchedGeneration(job, plan, prompt, mode, qual) {
     const currentPending = getPendingFiles(plan);
     if (currentPending.length === 0) break;
 
-    const targetFiles = currentPending.slice(0, FILES_PER_BATCH);
+    const sortedPending = sortFilesByResponsibility(currentPending);
+    const targetFiles = pickBatchFiles(sortedPending, FILES_PER_BATCH);
 
     addLog('ui', '📦', 'Batch ' + batchNum + '/' + totalBatches,
       'Genero: ' + targetFiles.join(', '));
@@ -1184,6 +1570,44 @@ input:focus,textarea:focus,select:focus{border-color:var(--primary);box-shadow:0
 Carica SEMPRE Google Fonts: <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 MAI sfondo bianco grezzo (#fff). Usa la palette. Ogni bottone/input/card DEVE avere hover/focus state.
 Se dashboard/app: sidebar scura (250px) a sinistra, main content a destra con padding 2rem, layout flex/grid.
+
+DESIGN SYSTEM — COMPONENTI PRE-COSTRUITI (usa questi pattern, non reinventarli):
+
+/* Sidebar */
+.sidebar{width:260px;background:var(--bg-alt,#0b1120);border-right:1px solid var(--border);padding:1.5rem;position:fixed;top:0;left:0;bottom:0;display:flex;flex-direction:column;gap:0.5rem;overflow-y:auto}
+.sidebar .logo{font-size:1.25rem;font-weight:700;padding:0.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:0.5rem}
+.sidebar .nav-item{padding:0.6rem 0.8rem;border-radius:8px;color:var(--text-muted);cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:0.6rem;font-size:0.9rem;font-weight:500}
+.sidebar .nav-item:hover,.sidebar .nav-item.active{background:var(--surface);color:var(--text)}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:opacity 0.2s}
+.modal-overlay.active{opacity:1;pointer-events:all}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:1.5rem;width:90%;max-width:480px;box-shadow:0 25px 60px rgba(0,0,0,0.4)}
+
+/* Toast */
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;padding:0.75rem 1.25rem;border-radius:8px;color:#fff;font-weight:500;z-index:2000;transform:translateY(20px);opacity:0;transition:all 0.3s}
+.toast.show{transform:translateY(0);opacity:1}
+
+/* Badge */
+.badge{display:inline-flex;padding:0.2rem 0.6rem;border-radius:99px;font-size:0.75rem;font-weight:600}
+.badge-primary{background:rgba(99,102,241,0.15);color:var(--primary)}
+.badge-success{background:rgba(16,185,129,0.15);color:#10b981}
+
+/* Empty state */
+.empty-state{text-align:center;padding:3rem;color:var(--text-muted)}
+.empty-state .empty-icon{font-size:3rem;margin-bottom:1rem;opacity:0.5}
+
+/* Content grid */
+.content-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
+
+/* Toolbar */
+.toolbar{display:flex;align-items:center;justify-content:space-between;gap:1rem}
+
+/* Animations */
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+
+USA questi componenti quando servono. NON reinventare sidebar, modal, toast, badge — usa esattamente questi pattern e adattali al progetto.
 
 REGOLE ANTI-BUG FUNZIONALI:
 - Ogni funzione referenziata da onclick/addEventListener DEVE essere definita nel codice
