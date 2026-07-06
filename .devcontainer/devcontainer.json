@@ -1,0 +1,19 @@
+{
+  "name": "ForgeAI v9",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "forwardPorts": [8787],
+  "portsAttributes": {
+    "8787": {
+      "label": "ForgeAI",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "cd server && npm install && (npx playwright install --with-deps chromium || echo 'Playwright opzionale non installato')",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}
