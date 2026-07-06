@@ -23,7 +23,21 @@ server/ (Node + Express)
 Se il backend non è attivo, la UI ricade automaticamente nella vecchia pipeline
 browser-only (v8), che resta funzionante ma con qualità inferiore.
 
-## Avvio
+## Avvio da iPad / iPhone (GitHub Codespaces)
+
+Non serve un computer: il server gira in un Codespace gratuito (120 ore/mese) direttamente dal browser.
+
+1. Apri questo repository su **github.com** da Safari.
+2. Tocca **Code → Codespaces → Create codespace** (sul branch che vuoi usare).
+3. Aspetta che l'ambiente si prepari (la prima volta installa tutto da solo).
+4. Nel terminale in basso scrivi: `cd server && npm start`
+5. Appare la notifica che la **porta 8787** è disponibile: tocca **"Open in Browser"**
+   (oppure tab "Ports" → apri l'indirizzo della porta 8787).
+6. Si apre ForgeAI: imposta la API key con ⚙ e inizia a generare.
+
+Quando hai finito, ferma il Codespace da github.com → Codespaces per non consumare ore.
+
+## Avvio da computer
 
 Richiede Node.js ≥ 18.
 
