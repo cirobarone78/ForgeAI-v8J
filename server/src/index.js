@@ -144,6 +144,7 @@ wss.on('connection', (socket) => {
         abortController,
         onEvent: send,
         planMode: mode === 'plan',
+        maxCostUsd: Number(msg.maxCostUsd) > 0 ? Number(msg.maxCostUsd) : 0,
       });
 
       if (out.sessionId) ws.writeMeta(projectId, { sessionId: out.sessionId });
@@ -154,6 +155,7 @@ wss.on('connection', (socket) => {
         mode,
         ok: !!out.ok,
         aborted: !!out.aborted,
+        costLimit: !!out.costLimitHit,
         costUsd: out.costUsd || 0,
         turns: out.turns || 0,
         previewUrl: '/preview/' + projectId + '/',

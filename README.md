@@ -76,6 +76,9 @@ condividere per tutta la collezione — si costruisce da sola, senza passaggi ex
 - Puoi scrivere in chat **mentre** l'agente lavora: il messaggio gli viene inoltrato subito.
 - Per i progetti nuovi l'agente propone prima un **piano** (meccaniche, controlli, stile, file):
   confermi, chiedi modifiche o annulli — la costruzione (e la spesa) parte solo dopo il tuo ok.
+- **Costi sotto controllo**: mentre l'agente lavora, il badge in alto mostra la spesa in tempo
+  reale ("⚡ $0.42"); da ⚙ imposti un **tetto di spesa per run** (default $2) — superato quello,
+  il run si interrompe e i file generati fino a lì restano nel progetto.
 - L'agente gira con permessi shell reali sulla tua macchina (come Claude Code): usa il
   progetto in locale e per uso personale.
 

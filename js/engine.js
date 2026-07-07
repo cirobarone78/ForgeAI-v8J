@@ -45,6 +45,23 @@
     label.parentElement?.appendChild(pill);
   }
 
+  // ── Tetto di spesa per run (persistito nel browser, default $2) ──
+  function getMaxCost() {
+    const v = parseFloat(localStorage.getItem('fg_max_cost') ?? '2');
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  }
+
+  window.saveCostCap = function () {
+    const v = parseFloat(document.getElementById('cost-cap-inp').value);
+    localStorage.setItem('fg_max_cost', Number.isFinite(v) && v >= 0 ? String(v) : '2');
+    toast(v > 0 ? '✦ Tetto di spesa: $' + v.toFixed(2) + ' per run' : '✦ Tetto di spesa disattivato', 'ok');
+  };
+
+  function setBadgeCost(usd) {
+    const b = document.getElementById('engine-badge');
+    if (b) b.textContent = usd == null ? '⚡ Agent Engine' : '⚡ $' + usd.toFixed(2);
+  }
+
   // ── Preview: punta l'iframe alla preview servita dal backend ──
   function updatePrevUrl(relUrl) {
     document.getElementById('prev-empty').style.display = 'none';
@@ -148,6 +165,8 @@
 
         if (evt.type === 'status') {
           addLog('plan', 'ℹ️', 'Engine', evt.text);
+        } else if (evt.type === 'cost') {
+          setBadgeCost(evt.usd);
         } else if (evt.type === 'tool') {
           logToolEvent(evt);
         } else if (evt.type === 'agent_text') {
@@ -172,7 +191,12 @@
           out = { ok: !!evt.ok, aborted: !!evt.aborted };
           if (!planPhase) {
             const nFiles = Object.keys(S.cur?.files || {}).length;
-            if (evt.aborted) {
+            if (evt.costLimit) {
+              updateJob(job, { status: 'CANCELLED' });
+              renderBbl('ai', '⛔ **Tetto di spesa raggiunto** ($' + (evt.costUsd || 0).toFixed(2) + ') — run interrotto. I file generati finora restano nel progetto; puoi alzare il tetto da ⚙ e riprovare.');
+              toast('⛔ Tetto di spesa raggiunto', 'err');
+              if (evt.hasIndexHtml) { updatePrevUrl(evt.previewUrl); }
+            } else if (evt.aborted) {
               updateJob(job, { status: 'CANCELLED' });
               renderBbl('ai', '⏹ Run interrotto.');
             } else if (evt.ok) {
@@ -229,34 +253,39 @@
 
     const model = S.model === 'auto' ? undefined : MODELS[S.model];
     const apiKey = S.key === 'server' ? undefined : S.key;
-    const base = { type: 'run', projectId, prompt, apiKey, model };
+    const base = { type: 'run', projectId, prompt, apiKey, model, maxCostUsd: getMaxCost() };
     const isNew = !Object.keys(S.cur.files || {}).length;
 
-    // Progetti nuovi: prima il piano, poi (dopo conferma) la costruzione.
-    if (isNew) {
-      updateJob(job, { status: 'PLAN' });
-      const plan = await runPhase({ ...base, mode: 'plan' }, job, { planPhase: true });
-      if (plan.aborted) { updateJob(job, { status: 'CANCELLED' }); return; }
-      if (!plan.ok) { if (job.status === 'PLAN') updateJob(job, { status: 'FAILED' }); return; }
+    try {
+      // Progetti nuovi: prima il piano, poi (dopo conferma) la costruzione.
+      if (isNew) {
+        updateJob(job, { status: 'PLAN' });
+        const plan = await runPhase({ ...base, mode: 'plan' }, job, { planPhase: true });
+        if (plan.aborted) { updateJob(job, { status: 'CANCELLED' }); return; }
+        if (!plan.ok) { if (job.status === 'PLAN') updateJob(job, { status: 'FAILED' }); return; }
 
-      stopProg();
-      const decision = await showPlanCard();
-      startProg();
-      if (!decision.confirmed) {
-        updateJob(job, { status: 'CANCELLED' });
-        renderBbl('ai', '⏹ Piano annullato — descrivi pure una nuova idea.');
-        saveMsg('ai', '⏹ Piano annullato.');
-        return;
+        stopProg();
+        const decision = await showPlanCard();
+        startProg();
+        if (!decision.confirmed) {
+          updateJob(job, { status: 'CANCELLED' });
+          renderBbl('ai', '⏹ Piano annullato — descrivi pure una nuova idea.');
+          saveMsg('ai', '⏹ Piano annullato.');
+          return;
+        }
+        if (decision.changes) {
+          renderBbl('user', '✏️ Modifiche al piano: ' + decision.changes);
+          saveMsg('user', '[piano] ' + decision.changes);
+        }
+        updateJob(job, { status: 'RUN' });
+        await runPhase({ ...base, mode: 'build', changes: decision.changes }, job, {});
+      } else {
+        updateJob(job, { status: 'RUN' });
+        await runPhase(base, job, {});
       }
-      if (decision.changes) {
-        renderBbl('user', '✏️ Modifiche al piano: ' + decision.changes);
-        saveMsg('user', '[piano] ' + decision.changes);
-      }
-      updateJob(job, { status: 'RUN' });
-      await runPhase({ ...base, mode: 'build', changes: decision.changes }, job, {});
-    } else {
-      updateJob(job, { status: 'RUN' });
-      await runPhase(base, job, {});
+    } finally {
+      setBadgeCost(null);
+      ['plan', 'ui', 'logic', 'test'].forEach(deactivateChip);
     }
   }
 
