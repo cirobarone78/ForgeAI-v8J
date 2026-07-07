@@ -305,6 +305,11 @@
         </div>
         <div class="key-info" id="key-info"></div>
       </div>
+      <div class="field" style="margin-top:14px">
+        <div class="flabel">Tetto di spesa per run ($)</div>
+        <input type="number" class="finput" id="cost-cap-inp" min="0" step="0.5" placeholder="2" onchange="saveCostCap()">
+        <div class="fhint">L'agente si ferma automaticamente se un run supera questo costo (0 = nessun limite). I file generati fino a quel punto restano nel progetto.</div>
+      </div>
     </div>
     <div class="mfooter">
       <button class="mbtn" onclick="closeModal('api-ov')">Annulla</button>

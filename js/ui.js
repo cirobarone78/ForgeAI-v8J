@@ -174,6 +174,8 @@ function onDeploy(){
 // ══════════════════════════════════
 function openApi(){
   document.getElementById('api-inp').value=S.key;
+  const capInp=document.getElementById('cost-cap-inp');
+  if(capInp) capInp.value=localStorage.getItem('fg_max_cost') ?? '2';
   // E: Show current storage state
   const hasSaved = !!localStorage.getItem('fg3_key');
   document.getElementById('key-remember').checked = hasSaved;

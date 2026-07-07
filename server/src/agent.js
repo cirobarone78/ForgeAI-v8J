@@ -7,6 +7,24 @@ import { BUILDER_PROMPT, buildRunPrompt } from './prompts.js';
 
 const DEFAULT_MODEL = process.env.FORGE_MODEL || 'claude-sonnet-5';
 
+// Prezzi $/MTok (input, output) — per la stima del costo in tempo reale.
+// Cache read ≈ 0.1× input, cache write ≈ 1.25× input.
+const PRICING = [
+  { match: /sonnet-5/, in: 3, out: 15 },
+  { match: /opus-4/, in: 5, out: 25 },
+  { match: /haiku/, in: 1, out: 5 },
+  { match: /sonnet/, in: 3, out: 15 },
+];
+
+function estimateCostUsd(model, usage) {
+  const p = PRICING.find(x => x.match.test(model || '')) || PRICING[0];
+  const inTok = usage.input_tokens || 0;
+  const outTok = usage.output_tokens || 0;
+  const cacheRead = usage.cache_read_input_tokens || 0;
+  const cacheWrite = usage.cache_creation_input_tokens || 0;
+  return (inTok * p.in + outTok * p.out + cacheRead * p.in * 0.1 + cacheWrite * p.in * 1.25) / 1e6;
+}
+
 // Stream di input: permette di iniettare messaggi dell'utente MENTRE l'agente lavora
 // (la feature "interactive chat" della UI, ma vera).
 export function createUserStream(initialText) {
@@ -65,7 +83,7 @@ function toolDetail(name, input = {}) {
  * onEvent riceve eventi: status | agent_text | tool | result-interni.
  * Ritorna { ok, sessionId, resultText, costUsd, turns }.
  */
-export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, model, resumeSessionId, stream, abortController, onEvent, planMode }) {
+export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, model, resumeSessionId, stream, abortController, onEvent, planMode, maxCostUsd }) {
   const env = { ...process.env };
   if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
 
@@ -75,6 +93,10 @@ export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, mode
   let costUsd = 0;
   let turns = 0;
   let ok = false;
+  let costLimitHit = false;
+  let estCost = 0;
+  const seenUsageIds = new Set();
+  let activeModel = model || DEFAULT_MODEL;
 
   const q = query({
     prompt: input,
@@ -104,8 +126,22 @@ export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, mode
     for await (const msg of q) {
       if (msg.type === 'system' && msg.subtype === 'init') {
         sessionId = msg.session_id || sessionId;
-        onEvent({ type: 'status', text: 'Agente avviato · modello ' + (msg.model || model || DEFAULT_MODEL) });
+        activeModel = msg.model || activeModel;
+        onEvent({ type: 'status', text: 'Agente avviato · modello ' + activeModel });
       } else if (msg.type === 'assistant') {
+        // Costo stimato in tempo reale (dedup per id messaggio) + tetto di spesa
+        const usage = msg.message?.usage;
+        const mid = msg.message?.id;
+        if (usage && mid && !seenUsageIds.has(mid)) {
+          seenUsageIds.add(mid);
+          estCost += estimateCostUsd(activeModel, usage);
+          onEvent({ type: 'cost', usd: estCost });
+          if (maxCostUsd > 0 && estCost >= maxCostUsd && !costLimitHit) {
+            costLimitHit = true;
+            onEvent({ type: 'status', text: '⛔ Tetto di spesa raggiunto ($' + maxCostUsd.toFixed(2) + ') — interrompo il run.' });
+            abortController?.abort();
+          }
+        }
         for (const block of msg.message?.content || []) {
           if (block.type === 'text' && block.text?.trim()) {
             onEvent({ type: 'agent_text', text: block.text });
@@ -128,13 +164,13 @@ export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, mode
     }
   } catch (err) {
     if (abortController?.signal?.aborted) {
-      onEvent({ type: 'status', text: 'Run interrotto dall\'utente.' });
-      return { ok: false, aborted: true, sessionId, resultText, costUsd, turns };
+      if (!costLimitHit) onEvent({ type: 'status', text: 'Run interrotto dall\'utente.' });
+      return { ok: false, aborted: true, costLimitHit, sessionId, resultText, costUsd: costUsd || estCost, turns };
     }
     throw err;
   }
 
-  return { ok, sessionId, resultText, costUsd, turns };
+  return { ok, costLimitHit, sessionId, resultText, costUsd: costUsd || estCost, turns };
 }
 
 export { buildRunPrompt };
