@@ -62,6 +62,13 @@ Il bottone **🌍 Pubblica** mette il progetto su GitHub Pages con un click:
 - Le pubblicazioni successive **aggiornano** la stessa repo (niente cancellazioni).
 - Funziona per i progetti statici (con `index.html`); per progetti con build usa 🐙 GitHub + Vercel/Netlify.
 
+### 🕹 Galleria arcade
+
+Ogni pubblicazione aggiorna anche il tuo **arcade personale**: una pagina
+`https://<tuo-utente>.github.io/forge-arcade/` con tutti i giochi pubblicati in una
+griglia di card (anteprima live in miniatura, tocca per giocare). Un solo link da
+condividere per tutta la collezione — si costruisce da sola, senza passaggi extra.
+
 ## Note
 
 - I progetti generati vivono in `server/workspaces/` (esclusi da git).

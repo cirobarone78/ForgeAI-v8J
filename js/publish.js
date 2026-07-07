@@ -27,6 +27,86 @@
     return btoa(unescape(encodeURIComponent(content)));
   }
 
+  function b64decode(content) {
+    return decodeURIComponent(escape(atob(String(content).replace(/\s/g, ''))));
+  }
+
+  // ── Helper GitHub API ──
+  async function ghGetFile(login, repo, path) {
+    const r = await fetch(`${GH_API}/repos/${login}/${repo}/contents/${path}`, { headers: ghHeaders() });
+    return r.ok ? r.json() : null;
+  }
+
+  async function ghPut(login, repo, path, content, message) {
+    const existing = await ghGetFile(login, repo, path);
+    const r = await fetch(`${GH_API}/repos/${login}/${repo}/contents/${path}`, {
+      method: 'PUT', headers: ghHeaders(),
+      body: JSON.stringify({
+        message,
+        content: b64(content),
+        ...(existing ? { sha: existing.sha } : {})
+      })
+    });
+    if (!r.ok) throw new Error(path + ': ' + ((await r.json()).message || r.status));
+  }
+
+  // Ritorna true se la repo è stata appena creata
+  async function ensureRepo(login, name, description) {
+    const r = await fetch(`${GH_API}/repos/${login}/${name}`, { headers: ghHeaders() });
+    if (r.ok) return false;
+    const cRes = await fetch(GH_API + '/user/repos', {
+      method: 'POST', headers: ghHeaders(),
+      body: JSON.stringify({ name, description, private: false, auto_init: false })
+    });
+    if (!cRes.ok) throw new Error((await cRes.json()).message || 'Errore creazione repo ' + name);
+    await sleep(800);
+    return true;
+  }
+
+  async function enablePages(login, repo) {
+    const r = await fetch(`${GH_API}/repos/${login}/${repo}/pages`, {
+      method: 'POST',
+      headers: { ...ghHeaders(), 'Accept': 'application/vnd.github+json' },
+      body: JSON.stringify({ source: { branch: 'main', path: '/' } })
+    });
+    if (!r.ok && r.status !== 409) console.warn('Pages ' + repo + ':', r.status);
+  }
+
+  // ── Galleria arcade: aggiorna games.json + pagina su forge-arcade ──
+  const ARCADE_REPO = 'forge-arcade';
+
+  async function updateArcade(login, gameEntry) {
+    await ensureRepo(login, ARCADE_REPO, 'Il mio arcade — giochi creati con ForgeAI');
+
+    // games.json: leggi, unisci, riscrivi
+    let data = { games: [] };
+    const existing = await ghGetFile(login, ARCADE_REPO, 'games.json');
+    if (existing && existing.content) {
+      try { data = JSON.parse(b64decode(existing.content)); } catch { /* riparte pulito */ }
+    }
+    if (!Array.isArray(data.games)) data.games = [];
+    const i = data.games.findIndex(g => g.id === gameEntry.id);
+    if (i >= 0) {
+      data.games[i] = { ...gameEntry, addedAt: data.games[i].addedAt || gameEntry.addedAt };
+    } else {
+      data.games.unshift(gameEntry);
+    }
+    data.updated = new Date().toISOString();
+    await ghPut(login, ARCADE_REPO, 'games.json', JSON.stringify(data, null, 2), 'Update games.json (ForgeAI)');
+
+    // Pagina arcade: presa da questa app e pushata (così gli aggiornamenti della
+    // pagina arrivano a tutti gli arcade alla pubblicazione successiva)
+    try {
+      const tplRes = await fetch('arcade/index.html');
+      if (tplRes.ok) {
+        await ghPut(login, ARCADE_REPO, 'index.html', await tplRes.text(), 'Update arcade page (ForgeAI)');
+      }
+    } catch { /* la pagina resta quella già pubblicata */ }
+
+    await enablePages(login, ARCADE_REPO);
+    return `https://${login}.github.io/${ARCADE_REPO}/`;
+  }
+
   function isPublishable() {
     return S.cur && S.cur.files && S.cur.files['index.html'] && !needsBuild();
   }
@@ -71,8 +151,8 @@
     publishNow();
   };
 
-  // ── Card in chat con il link pubblico ──
-  function showPublishedCard(url, isUpdate) {
+  // ── Card in chat con il link pubblico (+ galleria arcade) ──
+  function showPublishedCard(url, isUpdate, arcadeUrl) {
     const mc = document.getElementById('msgs');
     const d = document.createElement('div');
     d.style.cssText = 'display:flex;justify-content:center;padding:6px 0';
@@ -80,10 +160,12 @@
       <div style="display:flex;flex-direction:column;gap:8px;align-items:center;padding:14px 20px;border-radius:16px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);max-width:90%">
         <div style="font-family:'Outfit',sans-serif;font-size:13px;font-weight:700;color:#10B981">🌍 ${isUpdate ? 'Aggiornato online' : 'Pubblicato online'}</div>
         <a href="${url}" target="_blank" style="color:#3A86FF;font-size:13px;word-break:break-all;text-align:center">${url}</a>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
           <button onclick="navigator.clipboard.writeText('${url}').then(()=>toast('⎘ Link copiato','ok'))" style="padding:7px 14px;border-radius:9999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.05);color:#fff;font-size:12px;font-weight:600;cursor:pointer">⎘ Copia link</button>
           <a href="${url}" target="_blank" style="padding:7px 14px;border-radius:9999px;border:1px solid rgba(16,185,129,0.3);background:rgba(16,185,129,0.12);color:#10B981;font-size:12px;font-weight:600;text-decoration:none">▶ Apri</a>
+          ${arcadeUrl ? `<a href="${arcadeUrl}" target="_blank" style="padding:7px 14px;border-radius:9999px;border:1px solid rgba(255,159,28,0.3);background:rgba(255,159,28,0.1);color:#FF9F1C;font-size:12px;font-weight:600;text-decoration:none">🕹 Arcade</a>` : ''}
         </div>
+        ${arcadeUrl ? `<div style="font-size:11px;color:rgba(255,255,255,0.35)">Aggiunto alla tua galleria: <a href="${arcadeUrl}" target="_blank" style="color:rgba(255,159,28,0.7)">${arcadeUrl}</a></div>` : ''}
         <div style="font-size:11px;color:rgba(255,255,255,0.3)">La prima pubblicazione può richiedere ~1 minuto per andare live.</div>
       </div>`;
     mc.appendChild(d);
@@ -139,61 +221,48 @@
 
       // 2. Repo: riusa quella del progetto o creala
       const repoName = publishSlug();
-      const repoRes = await fetch(`${GH_API}/repos/${user.login}/${repoName}`, { headers: ghHeaders() });
-      const isUpdate = repoRes.ok;
-      if (!isUpdate) {
-        const cRes = await fetch(GH_API + '/user/repos', {
-          method: 'POST', headers: ghHeaders(),
-          body: JSON.stringify({
-            name: repoName,
-            description: 'Creato con ForgeAI — ' + (S.cur.name || 'app'),
-            private: false, auto_init: false
-          })
-        });
-        if (!cRes.ok) throw new Error((await cRes.json()).message || 'Errore creazione repo');
-        await sleep(800);
-      }
+      const created = await ensureRepo(user.login, repoName, 'Creato con ForgeAI — ' + (S.cur.name || 'app'));
+      const isUpdate = !created;
 
       // 3. Upload/aggiornamento file (non distruttivo: PUT con sha se esiste)
       const files = Object.entries(S.cur.files);
       let done = 0;
       for (const [path, content] of files) {
-        const urlPath = `${GH_API}/repos/${user.login}/${repoName}/contents/${path}`;
-        let sha;
-        if (isUpdate) {
-          const exRes = await fetch(urlPath, { headers: ghHeaders() });
-          if (exRes.ok) sha = (await exRes.json()).sha;
-        }
-        const putRes = await fetch(urlPath, {
-          method: 'PUT', headers: ghHeaders(),
-          body: JSON.stringify({
-            message: (sha ? 'Update ' : 'Add ') + path + ' (ForgeAI)',
-            content: b64(content),
-            ...(sha ? { sha } : {})
-          })
-        });
-        if (!putRes.ok) throw new Error('Upload ' + path + ': ' + ((await putRes.json()).message || putRes.status));
+        await ghPut(user.login, repoName, path, content, (isUpdate ? 'Update ' : 'Add ') + path + ' (ForgeAI)');
         done++;
         setPubBtnState(`⏳ ${done}/${files.length}`);
       }
 
       // 4. Attiva Pages (409 = già attivo, ok)
-      const pgRes = await fetch(`${GH_API}/repos/${user.login}/${repoName}/pages`, {
-        method: 'POST',
-        headers: { ...ghHeaders(), 'Accept': 'application/vnd.github+json' },
-        body: JSON.stringify({ source: { branch: 'main', path: '/' } })
-      });
-      if (!pgRes.ok && pgRes.status !== 409) {
-        console.warn('Pages:', pgRes.status);
-      }
+      await enablePages(user.login, repoName);
 
-      // 5. Salva e mostra il link
+      // 5. Salva
       const url = `https://${user.login}.github.io/${repoName}/`;
       S.cur.publishRepo = repoName;
       S.cur.publishedUrl = url;
       save();
-      showPublishedCard(url, isUpdate);
-      saveMsg('ai', '🌍 ' + (isUpdate ? 'Aggiornato' : 'Pubblicato') + ': ' + url);
+
+      // 6. Aggiorna la galleria arcade (non fatale se fallisce)
+      let arcadeUrl = null;
+      try {
+        setPubBtnState('⏳ Galleria…');
+        const now = new Date().toISOString();
+        arcadeUrl = await updateArcade(user.login, {
+          id: repoName,
+          name: S.cur.name || repoName,
+          url,
+          addedAt: now,
+          updatedAt: now
+        });
+        localStorage.setItem('fg_arcade_url', arcadeUrl);
+      } catch (aErr) {
+        console.warn('Arcade:', aErr);
+        toast('⚠️ Galleria non aggiornata: ' + aErr.message, 'err');
+      }
+
+      // 7. Mostra i link
+      showPublishedCard(url, isUpdate, arcadeUrl);
+      saveMsg('ai', '🌍 ' + (isUpdate ? 'Aggiornato' : 'Pubblicato') + ': ' + url + (arcadeUrl ? ' · Arcade: ' + arcadeUrl : ''));
       toast(isUpdate ? '🌍 Versione online aggiornata!' : '🌍 Pubblicato online!', 'ok');
     } catch (err) {
       toast('❌ ' + err.message, 'err');
