@@ -52,6 +52,16 @@ Apri **http://localhost:8787**, imposta la tua API key Anthropic (⚙ in alto a 
 e descrivi l'app o il gioco che vuoi. In alternativa alla key nella UI puoi esportare
 `ANTHROPIC_API_KEY` prima di `npm start`.
 
+## Pubblica online (link condivisibile)
+
+Il bottone **🌍 Pubblica** mette il progetto su GitHub Pages con un click:
+
+- La prima volta chiede un GitHub Token (permesso `public_repo`), salvato nel browser.
+- Crea una repo pubblica `forge-<nome>` sul tuo account e attiva Pages; il link
+  `https://<tuo-utente>.github.io/forge-<nome>/` appare in chat, pronto da condividere.
+- Le pubblicazioni successive **aggiornano** la stessa repo (niente cancellazioni).
+- Funziona per i progetti statici (con `index.html`); per progetti con build usa 🐙 GitHub + Vercel/Netlify.
+
 ## Note
 
 - I progetti generati vivono in `server/workspaces/` (esclusi da git).

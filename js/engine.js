@@ -167,6 +167,7 @@
             renderBbl('ai', '✅ **Completato** — ' + nFiles + ' file nel progetto · ' + (evt.turns || 0) + ' turni' + cost);
             saveMsg('ai', '✅ Agente completato (' + nFiles + ' file).');
             toast('✅ Progetto pronto', 'ok');
+            window.addPublishBtn?.();
           } else {
             updateJob(job, { status: 'FAILED' });
             renderBbl('ai', '⚠️ L\'agente si è fermato senza completare. Riprova o riformula la richiesta.');
