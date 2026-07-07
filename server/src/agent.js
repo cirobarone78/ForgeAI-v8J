@@ -55,6 +55,7 @@ function toolDetail(name, input = {}) {
     case 'Grep': return input.pattern || '';
     case 'TodoWrite': return (input.todos || []).map(t => t.content).slice(0, 3).join(' · ');
     case 'mcp__forge__screenshot': return input.url || '';
+    case 'mcp__forge__playtest': return (input.actions || []).map(a => a.do === 'key' ? (a.key + (a.times > 1 ? '×' + a.times : '')) : a.do).join(' → ').slice(0, 120);
     default: return JSON.stringify(input).slice(0, 120);
   }
 }
@@ -85,7 +86,7 @@ export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, mode
       // (che è vietato come root, es. dentro container).
       permissionMode: 'acceptEdits',
       canUseTool: async (toolName, input) => ({ behavior: 'allow', updatedInput: input }),
-      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite', 'WebFetch', 'mcp__forge__screenshot'],
+      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite', 'WebFetch', 'mcp__forge__screenshot', 'mcp__forge__playtest'],
       mcpServers: { forge: makeForgeMcpServer() },
       maxTurns: 120,
       settingSources: [],

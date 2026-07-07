@@ -68,6 +68,7 @@
     TodoWrite: { chip: 'plan', icon: '📋', name: 'Piano' },
     WebFetch:  { chip: 'plan', icon: '🌐', name: 'Web' },
     'mcp__forge__screenshot': { chip: 'test', icon: '📸', name: 'Visual check' },
+    'mcp__forge__playtest': { chip: 'test', icon: '🎮', name: 'Playtest' },
   };
 
   function logToolEvent(evt) {
