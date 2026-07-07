@@ -55,6 +55,32 @@ cosa vuole; tu lo costruisci COMPLETO e FUNZIONANTE nella cartella di lavoro cor
   e cosa hai verificato (build ok, screenshot ok, errori console 0).
 `;
 
+// Fase 1: proponi un piano, senza costruire.
+export function buildPlanPrompt({ userText, isEdit }) {
+  return `MODALITÀ PIANO — NON costruire ancora, NON scrivere file, NON usare tool di scrittura o shell.
+
+L'utente vuole: "${userText}"
+${isEdit ? 'NOTA: il progetto esiste già nel workspace — il piano riguarda le MODIFICHE richieste.' : ''}
+
+Proponi un piano BREVE e concreto (max 15 righe totali), in questo formato:
+🎯 **Cosa costruirò** — 1-2 frasi
+🕹 **Meccaniche e controlli** — cosa fa il giocatore/utente, su desktop e su mobile
+🎨 **Stile visivo** — palette, atmosfera, font
+📁 **File** — elenco dei file previsti
+
+Chiudi con UNA sola domanda: se procedere o se cambiare qualcosa. Nessun codice.`;
+}
+
+// Fase 2: piano approvato (stessa sessione, via resume) — costruisci.
+export function buildGoPrompt({ userText, changes, previewUrl }) {
+  return `PIANO APPROVATO${changes ? ' CON MODIFICHE' : ''} — procedi a costruire ORA.
+${changes ? '\nMODIFICHE RICHIESTE DALL\'UTENTE AL PIANO:\n' + changes + '\n' : ''}
+Richiesta originale (per riferimento): "${userText}"
+PREVIEW_URL: ${previewUrl}
+
+Costruisci il progetto COMPLETO secondo il piano${changes ? ' aggiornato con le modifiche' : ''}, seguendo tutto il workflow: implementazione, node --check, screenshot, playtest per i giochi, riepilogo finale in italiano.`;
+}
+
 export function buildRunPrompt({ userText, previewUrl, isEdit }) {
   return `CONTESTO FORGE:
 - Lavori nel workspace del progetto (directory corrente).

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import * as ws from './workspaces.js';
 import { runAgent, createUserStream, buildRunPrompt } from './agent.js';
+import { buildPlanPrompt, buildGoPrompt } from './prompts.js';
 import { closeBrowser } from './screenshot.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -110,14 +111,25 @@ wss.on('connection', (socket) => {
     const files = ws.readFiles(projectId) || {};
     const isEdit = Object.keys(files).length > 0;
     const previewUrl = 'http://localhost:' + PORT + '/preview/' + projectId + '/';
+    const mode = msg.mode === 'plan' || msg.mode === 'build' ? msg.mode : 'direct';
+    const userText = String(msg.prompt || '').slice(0, 20000);
 
-    stream = createUserStream(buildRunPrompt({
-      userText: String(msg.prompt || '').slice(0, 20000),
-      previewUrl,
-      isEdit,
-    }));
+    let runPrompt;
+    if (mode === 'plan') {
+      runPrompt = buildPlanPrompt({ userText, isEdit });
+    } else if (mode === 'build') {
+      runPrompt = buildGoPrompt({ userText, changes: String(msg.changes || '').slice(0, 4000), previewUrl });
+    } else {
+      runPrompt = buildRunPrompt({ userText, previewUrl, isEdit });
+    }
+    stream = createUserStream(runPrompt);
 
-    send({ type: 'status', text: isEdit ? 'Modifica progetto esistente…' : 'Nuovo progetto: avvio agente…' });
+    send({
+      type: 'status',
+      text: mode === 'plan' ? 'Preparo il piano…'
+        : mode === 'build' ? 'Piano approvato: costruzione in corso…'
+        : isEdit ? 'Modifica progetto esistente…' : 'Nuovo progetto: avvio agente…'
+    });
 
     try {
       const out = await runAgent({
@@ -131,13 +143,15 @@ wss.on('connection', (socket) => {
         stream,
         abortController,
         onEvent: send,
+        planMode: mode === 'plan',
       });
 
       if (out.sessionId) ws.writeMeta(projectId, { sessionId: out.sessionId });
 
-      send({ type: 'files', files: ws.readFiles(projectId) || {} });
+      if (mode !== 'plan') send({ type: 'files', files: ws.readFiles(projectId) || {} });
       send({
         type: 'result',
+        mode,
         ok: !!out.ok,
         aborted: !!out.aborted,
         costUsd: out.costUsd || 0,

@@ -74,6 +74,8 @@ condividere per tutta la collezione — si costruisce da sola, senza passaggi ex
 - I progetti generati vivono in `server/workspaces/` (esclusi da git).
 - Il modello si sceglie dal selettore in alto (Auto = Sonnet; Opus per i task più complessi).
 - Puoi scrivere in chat **mentre** l'agente lavora: il messaggio gli viene inoltrato subito.
+- Per i progetti nuovi l'agente propone prima un **piano** (meccaniche, controlli, stile, file):
+  confermi, chiedi modifiche o annulli — la costruzione (e la spesa) parte solo dopo il tuo ok.
 - L'agente gira con permessi shell reali sulla tua macchina (come Claude Code): usa il
   progetto in locale e per uso personale.
 

@@ -65,7 +65,7 @@ function toolDetail(name, input = {}) {
  * onEvent riceve eventi: status | agent_text | tool | result-interni.
  * Ritorna { ok, sessionId, resultText, costUsd, turns }.
  */
-export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, model, resumeSessionId, stream, abortController, onEvent }) {
+export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, model, resumeSessionId, stream, abortController, onEvent, planMode }) {
   const env = { ...process.env };
   if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
 
@@ -86,9 +86,12 @@ export async function runAgent({ dir, userText, previewUrl, isEdit, apiKey, mode
       // (che è vietato come root, es. dentro container).
       permissionMode: 'acceptEdits',
       canUseTool: async (toolName, input) => ({ behavior: 'allow', updatedInput: input }),
-      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite', 'WebFetch', 'mcp__forge__screenshot', 'mcp__forge__playtest'],
+      // In modalità piano l'agente può solo leggere: niente scrittura, shell o preview.
+      allowedTools: planMode
+        ? ['Read', 'Glob', 'Grep']
+        : ['Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'TodoWrite', 'WebFetch', 'mcp__forge__screenshot', 'mcp__forge__playtest'],
       mcpServers: { forge: makeForgeMcpServer() },
-      maxTurns: 120,
+      maxTurns: planMode ? 8 : 120,
       settingSources: [],
       env,
       abortController,
