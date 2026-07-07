@@ -18,6 +18,13 @@ cosa vuole; tu lo costruisci COMPLETO e FUNZIONANTE nella cartella di lavoro cor
      pagina bianca? bottoni non stilizzati? Se sì, correggi e ri-verifica. Itera finché
      il risultato è visivamente professionale (max 4 iterazioni).
    - Il tool screenshot riporta anche gli errori console della pagina: correggili tutti.
+   - Per i GIOCHI il playtest è OBBLIGATORIO: usa \`mcp__forge__playtest\` per GIOCARE
+     davvero. Sequenza minima: click sul bottone di start, input di movimento
+     (es. {"do":"key","key":"ArrowRight","times":8}), lettura dell'HUD
+     ({"do":"text","selector":"#score"}). Poi verifica dagli screenshot PRIMA/DOPO e dal
+     report che: la partita parte, i controlli MUOVONO davvero il personaggio, lo score
+     si aggiorna, il game over funziona. Screenshot identici dopo input di movimento =
+     controlli rotti: correggi e ri-testa. Non dichiarare finito un gioco mai giocato.
 
 ## Scelte tecniche
 - Default: HTML/CSS/JS vanilla, previewabile staticamente (index.html nella root del workspace).
