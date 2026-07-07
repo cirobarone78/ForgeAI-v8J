@@ -100,35 +100,47 @@
     return engineBase.replace(/^http/, 'ws') + '/ws';
   }
 
-  // ── Run principale: sostituisce runAgents/runDirect quando il backend c'è ──
-  async function engineRun(prompt) {
-    const job = createJob(prompt);
-    updateJob(job, { status: 'RUN' });
-    activateChip('plan');
-    addLog('plan', '⚡', 'Agent Engine', 'Invio richiesta al motore ad agente…');
+  // ── Card di approvazione del piano ──
+  function showPlanCard() {
+    return new Promise((resolve) => {
+      const mc = document.getElementById('msgs');
+      const d = document.createElement('div');
+      d.style.cssText = 'display:flex;justify-content:center;padding:6px 0';
+      d.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:10px;padding:16px 18px;border-radius:16px;background:rgba(255,159,28,0.07);border:1px solid rgba(255,159,28,0.3);width:min(480px,92%)">
+          <div style="font-family:'Outfit',sans-serif;font-size:13px;font-weight:700;color:#FF9F1C">📋 Piano proposto — vuoi che proceda?</div>
+          <textarea class="plan-changes" placeholder="Modifiche al piano (opzionale)… es: aggiungi power-up, tema spaziale" style="width:100%;min-height:52px;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;font-size:13px;font-family:inherit;outline:none;resize:vertical"></textarea>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="plan-cancel" style="padding:9px 16px;border-radius:9999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:#A1A1AA;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;cursor:pointer">✗ Annulla</button>
+            <button class="plan-go" style="padding:9px 20px;border-radius:9999px;border:1px solid rgba(16,185,129,0.35);background:rgba(16,185,129,0.15);color:#10B981;font-family:'Outfit',sans-serif;font-size:13px;font-weight:700;cursor:pointer">✓ Costruisci</button>
+          </div>
+        </div>`;
+      mc.appendChild(d);
+      d.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    let projectId;
-    try {
-      projectId = await ensureEngineProject();
-    } catch (e) {
-      updateJob(job, { status: 'FAILED' });
-      renderBbl('ai', '❌ Backend non raggiungibile: ' + e.message);
-      return;
-    }
+      const done = (confirmed) => {
+        const changes = d.querySelector('.plan-changes').value.trim();
+        d.querySelectorAll('button,textarea').forEach(el => el.disabled = true);
+        d.firstElementChild.style.opacity = '0.55';
+        resolve({ confirmed, changes });
+      };
+      d.querySelector('.plan-go').onclick = () => done(true);
+      d.querySelector('.plan-cancel').onclick = () => done(false);
+    });
+  }
+  window._forgeShowPlanCard = showPlanCard; // esposta per debug/test
 
-    const model = S.model === 'auto' ? undefined : MODELS[S.model];
-    const apiKey = S.key === 'server' ? undefined : S.key;
-
-    await new Promise((resolve) => {
+  // ── Una fase di run (plan o build/direct) su WebSocket ──
+  function runPhase(payload, job, { planPhase } = {}) {
+    return new Promise((resolve) => {
       const sock = new WebSocket(wsUrl());
       currentWs = sock;
       let finished = false;
+      let out = { ok: false, aborted: false };
 
-      const finish = () => { if (!finished) { finished = true; currentWs = null; resolve(); } };
+      const finish = () => { if (!finished) { finished = true; currentWs = null; resolve(out); } };
 
-      sock.onopen = () => {
-        sock.send(JSON.stringify({ type: 'run', projectId, prompt, apiKey, model }));
-      };
+      sock.onopen = () => sock.send(JSON.stringify(payload));
 
       sock.onmessage = (e) => {
         let evt;
@@ -142,12 +154,12 @@
           renderBbl('ai', evt.text);
           saveMsg('ai', evt.text);
         } else if (evt.type === 'files') {
-          if (evt.files && Object.keys(evt.files).length) {
-            saveSnapshot?.('Pre-agent: ' + prompt.slice(0, 40), job.id);
+          if (!planPhase && evt.files && Object.keys(evt.files).length) {
+            saveSnapshot?.('Pre-agent: ' + payload.prompt.slice(0, 40), job.id);
             S.cur.files = evt.files;
             S.cur.conv = S.history;
             if (!S.cur.name || S.cur.name === 'App') {
-              S.cur.name = prompt.replace(/[^a-zA-ZÀ-ÿ\s]/g, '').split(' ').filter(w => w.length > 3).slice(0, 4).join(' ') || 'App';
+              S.cur.name = payload.prompt.replace(/[^a-zA-ZÀ-ÿ\s]/g, '').split(' ').filter(w => w.length > 3).slice(0, 4).join(' ') || 'App';
               document.getElementById('pj-name').textContent = S.cur.name;
             }
             save();
@@ -157,22 +169,25 @@
             job.changedFiles = Object.keys(evt.files);
           }
         } else if (evt.type === 'result') {
-          const nFiles = Object.keys(S.cur?.files || {}).length;
-          if (evt.aborted) {
-            updateJob(job, { status: 'CANCELLED' });
-            renderBbl('ai', '⏹ Run interrotto.');
-          } else if (evt.ok) {
-            updateJob(job, { status: 'DONE' });
-            if (evt.hasIndexHtml) { updatePrevUrl(evt.previewUrl); switchTab('preview'); }
-            const cost = evt.costUsd ? ' · costo $' + evt.costUsd.toFixed(3) : '';
-            renderBbl('ai', '✅ **Completato** — ' + nFiles + ' file nel progetto · ' + (evt.turns || 0) + ' turni' + cost);
-            saveMsg('ai', '✅ Agente completato (' + nFiles + ' file).');
-            toast('✅ Progetto pronto', 'ok');
-            window.addPublishBtn?.();
-          } else {
-            updateJob(job, { status: 'FAILED' });
-            renderBbl('ai', '⚠️ L\'agente si è fermato senza completare. Riprova o riformula la richiesta.');
-            toast('⚠️ Run incompleto', 'err');
+          out = { ok: !!evt.ok, aborted: !!evt.aborted };
+          if (!planPhase) {
+            const nFiles = Object.keys(S.cur?.files || {}).length;
+            if (evt.aborted) {
+              updateJob(job, { status: 'CANCELLED' });
+              renderBbl('ai', '⏹ Run interrotto.');
+            } else if (evt.ok) {
+              updateJob(job, { status: 'DONE' });
+              if (evt.hasIndexHtml) { updatePrevUrl(evt.previewUrl); switchTab('preview'); }
+              const cost = evt.costUsd ? ' · costo $' + evt.costUsd.toFixed(3) : '';
+              renderBbl('ai', '✅ **Completato** — ' + nFiles + ' file nel progetto · ' + (evt.turns || 0) + ' turni' + cost);
+              saveMsg('ai', '✅ Agente completato (' + nFiles + ' file).');
+              toast('✅ Progetto pronto', 'ok');
+              window.addPublishBtn?.();
+            } else {
+              updateJob(job, { status: 'FAILED' });
+              renderBbl('ai', '⚠️ L\'agente si è fermato senza completare. Riprova o riformula la richiesta.');
+              toast('⚠️ Run incompleto', 'err');
+            }
           }
           sock.close();
           finish();
@@ -195,6 +210,54 @@
       };
       sock.onclose = () => finish();
     });
+  }
+
+  // ── Run principale: sostituisce runAgents/runDirect quando il backend c'è ──
+  async function engineRun(prompt) {
+    const job = createJob(prompt);
+    activateChip('plan');
+    addLog('plan', '⚡', 'Agent Engine', 'Invio richiesta al motore ad agente…');
+
+    let projectId;
+    try {
+      projectId = await ensureEngineProject();
+    } catch (e) {
+      updateJob(job, { status: 'FAILED' });
+      renderBbl('ai', '❌ Backend non raggiungibile: ' + e.message);
+      return;
+    }
+
+    const model = S.model === 'auto' ? undefined : MODELS[S.model];
+    const apiKey = S.key === 'server' ? undefined : S.key;
+    const base = { type: 'run', projectId, prompt, apiKey, model };
+    const isNew = !Object.keys(S.cur.files || {}).length;
+
+    // Progetti nuovi: prima il piano, poi (dopo conferma) la costruzione.
+    if (isNew) {
+      updateJob(job, { status: 'PLAN' });
+      const plan = await runPhase({ ...base, mode: 'plan' }, job, { planPhase: true });
+      if (plan.aborted) { updateJob(job, { status: 'CANCELLED' }); return; }
+      if (!plan.ok) { if (job.status === 'PLAN') updateJob(job, { status: 'FAILED' }); return; }
+
+      stopProg();
+      const decision = await showPlanCard();
+      startProg();
+      if (!decision.confirmed) {
+        updateJob(job, { status: 'CANCELLED' });
+        renderBbl('ai', '⏹ Piano annullato — descrivi pure una nuova idea.');
+        saveMsg('ai', '⏹ Piano annullato.');
+        return;
+      }
+      if (decision.changes) {
+        renderBbl('user', '✏️ Modifiche al piano: ' + decision.changes);
+        saveMsg('user', '[piano] ' + decision.changes);
+      }
+      updateJob(job, { status: 'RUN' });
+      await runPhase({ ...base, mode: 'build', changes: decision.changes }, job, {});
+    } else {
+      updateJob(job, { status: 'RUN' });
+      await runPhase(base, job, {});
+    }
   }
 
   // ── Aggancio alla UI esistente (dopo che lo script inline ha definito tutto) ──
